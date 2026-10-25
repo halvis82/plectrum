@@ -1,0 +1,45 @@
+name: gvs-probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm i youtubei.js@18.3.0
+      - env:
+          YT_OAUTH: ${{ secrets.YT_OAUTH }}
+        run: |
+          cat > probe.mjs <<'JS'
+          import { Constants, Innertube, Platform, UniversalCache } from "youtubei.js";
+          Platform.shim.eval = async (d) => new Function(d.output)();
+          const UA = "Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1";
+          Object.assign(Constants.CLIENTS.TV, { VERSION: "5.20260707", USER_AGENT: UA });
+          const tvFetch = async (input, init) => {
+            const url = typeof input === "string" ? input : input.url ?? String(input);
+            let body = init?.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+            if (/youtubei\/v1\//.test(url) && typeof body === "string" && body.includes('"TVHTML5"')) {
+              const j = JSON.parse(body);
+              Object.assign(j.context.client, { deviceMake: "Samsung", deviceModel: "UKS9800", osName: "Tizen", osVersion: "2.4.0", userAgent: UA });
+              const h = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)); h.set("user-agent", UA);
+              return fetch(input instanceof Request ? input.url : input, { ...init, method: "POST", headers: h, body: JSON.stringify(j) });
+            }
+            return fetch(input, init);
+          };
+          for (const auth of [true, false]) {
+            const yt = await Innertube.create({ retrieve_player: true, cache: new UniversalCache(false), fetch: tvFetch });
+            if (auth) await yt.session.signIn(JSON.parse(process.env.YT_OAUTH));
+            for (const id of ["IXdNnw99-Ic", "bx1Bh8ZvH84"]) {
+              try {
+                const info = await yt.getBasicInfo(id, { client: "TV" });
+                const st = info.playability_status?.status;
+                if (st !== "OK") { console.log(auth, id, st, info.playability_status?.reason); continue; }
+                const f = info.chooseFormat({ type: "audio", quality: "best" });
+                const url = await f.decipher(yt.session.player);
+                const r = await fetch(url, { headers: { range: "bytes=0-99999" } });
+                console.log(auth, id, "OK stream", r.status, (await r.arrayBuffer()).byteLength);
+              } catch (e) { console.log(auth, id, "ERR", String(e).slice(0, 150)); }
+            }
+          }
+          JS
+          node probe.mjs 2>&1 | grep -v YOUTUBEJS
