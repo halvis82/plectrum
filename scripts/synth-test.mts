@@ -66,10 +66,10 @@ if (process.argv.includes("--mic")) {
   }
 }
 
-const b = readFileSync("public/model/cqt_basis.bin");
+const b = readFileSync("public/model/cqt_basis.v1.bin");
 const basis = parseBasis(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
-const meta: ModelMeta = JSON.parse(readFileSync("public/model/btc170.json", "utf8"));
-const session = await ort.InferenceSession.create("public/model/btc170.onnx");
+const meta: ModelMeta = JSON.parse(readFileSync("public/model/btc170.v1.json", "utf8"));
+const session = await ort.InferenceSession.create("public/model/btc170.v1.onnx");
 const res = await analyze(y, basis, meta, async (x) => (await session.run({ x: new ort.Tensor("float32", x, [1, 108, 144]) })).logp.data as Float32Array);
 console.log(`bpm ${res.bpm} (true ${BPM}), meter ${res.meter}, beats ${res.beats.length} (true ${truth.length})`);
 

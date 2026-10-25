@@ -63,29 +63,42 @@ export function SongView({ song }: { song: SongData }) {
   }, [storageKey, setView]);
 
   // ---- playback ----
-  const [clock, setClock] = useState<Clock | null>(null);
+  const [mediaClock, setClock] = useState<Clock | null>(null);
   const [playing, setPlaying] = useState(false);
   const [beat, setBeat] = useState(-1);
   const [localUrl, setLocalUrl] = useState<string | null>(null);
+  const [ytFailed, setYtFailed] = useState(false);
   const ytEl = useRef<HTMLDivElement>(null);
   const audioEl = useRef<HTMLAudioElement>(null);
+  const firstChord = useMemo(() => {
+    const i = a.chords.findIndex((c) => c < 168);
+    return i >= 0 ? a.beats[i] : 0;
+  }, [a]);
 
+  // the player's container only exists once view prefs have loaded
+  const mounted = view !== null;
   useEffect(() => {
     if (!song.youtube_id || !ytEl.current) return;
     let p: YTPlayer | null = null;
     let cancelled = false;
-    const host = document.createElement("div");
-    ytEl.current.replaceChildren(host);
-    createPlayer(host, song.youtube_id, (s) => setPlaying(s === YT_STATE.PLAYING)).then((pl) => {
-      if (cancelled) return pl.destroy();
-      p = pl;
-      setClock({ now: () => pl.getCurrentTime(), seek: (t) => pl.seekTo(t, true), play: () => pl.playVideo(), pause: () => pl.pauseVideo() });
-    });
+    createPlayer(
+      ytEl.current,
+      song.youtube_id,
+      (s) => setPlaying(s === YT_STATE.PLAYING),
+      () => setYtFailed(true),
+    ).then(
+      (pl) => {
+        if (cancelled) return pl.destroy();
+        p = pl;
+        setClock({ now: () => pl.getCurrentTime(), seek: (t) => pl.seekTo(t), play: () => pl.playVideo(), pause: () => pl.pauseVideo() });
+      },
+      () => !cancelled && setYtFailed(true),
+    );
     return () => {
       cancelled = true;
       p?.destroy();
     };
-  }, [song.youtube_id]);
+  }, [song.youtube_id, mounted]);
 
   useEffect(() => {
     if (song.youtube_id) return;
@@ -104,7 +117,12 @@ export function SongView({ song }: { song: SongData }) {
     const el = audioEl.current;
     if (!localUrl || !el) return;
     setClock({ now: () => el.currentTime, seek: (t) => (el.currentTime = t), play: () => void el.play(), pause: () => el.pause() });
-  }, [localUrl]);
+  }, [localUrl, mounted]);
+
+  // no audio here (uploaded elsewhere, or YouTube unreachable): a silent play-along clock with a click
+  const noAudio = (!song.youtube_id && !localUrl) || ytFailed;
+  const fallbackClock = useMemo(() => (noAudio ? playAlongClock(a, setPlaying) : null), [noAudio, a]);
+  const clock = fallbackClock ?? mediaClock;
 
   useEffect(() => {
     if (!clock) return;
@@ -116,6 +134,13 @@ export function SongView({ song }: { song: SongData }) {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [clock, a.beats]);
+
+  /** Play from where you are, but never sit through a silent intro. */
+  const play = () => {
+    if (!clock) return;
+    if (clock.now() < firstChord - 1.5) clock.seek(Math.max(0, firstChord - 1));
+    clock.play();
+  };
 
   // ---- lyrics ----
   const [lyrics, setLyrics] = useState<{ lines: LyricLine[] | null; plain: string | null } | "loading" | null>("loading");
@@ -141,20 +166,23 @@ export function SongView({ song }: { song: SongData }) {
   const shapes = uniqueShapes(a, shape);
   const sounding = { ...stats.key, tonic: (stats.key.tonic + view.transpose + 120) % 12 };
   const seekBeat = (i: number) => {
-    clock?.seek(Math.max(0, a.beats[i] - 0.02));
-    clock?.play();
+    if (!clock) return;
+    clock.seek(Math.max(0, a.beats[i] - 0.02));
+    clock.play();
   };
 
   return (
     <div>
       {/* player */}
-      {song.youtube_id ? (
+      {song.youtube_id && !ytFailed ? (
         <div ref={ytEl} className="aspect-video w-full max-w-xl rounded-2xl overflow-hidden bg-black mb-4" />
       ) : localUrl ? (
         <audio ref={audioEl} src={localUrl} controls className="w-full mb-4" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
       ) : (
         <p className="text-xs text-muted mb-4">
-          {song.source === "record" ? "Recorded" : "Uploaded"} on another device, so there&apos;s no audio here. The chords are all below.
+          {ytFailed
+            ? "The video can't play here, so ▶ plays along silently with a click on every beat."
+            : `${song.source === "record" ? "Recorded" : "Captured"} on another device, so there's no audio here. ▶ plays along with a click on every beat.`}
         </p>
       )}
 
@@ -162,7 +190,7 @@ export function SongView({ song }: { song: SongData }) {
       <div className="sticky top-0 z-10 -mx-4 px-4 py-2.5 bg-bg/90 backdrop-blur border-b border-line flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         {clock && (
           <button
-            onClick={() => (playing ? clock.pause() : clock.play())}
+            onClick={() => (playing ? clock.pause() : play())}
             className="h-9 w-9 rounded-full bg-accent text-accent-fg grid place-items-center"
             aria-label={playing ? "Pause" : "Play"}
           >
@@ -415,4 +443,57 @@ function Segmented<T extends string>({ value, onChange, options }: { value: T; o
       ))}
     </div>
   );
+}
+
+/** Silent transport that follows the song's beat grid, with a metronome click. */
+function playAlongClock(a: Analysis, setPlaying: (p: boolean) => void): Clock {
+  let pos = 0, startedAt = 0, running = false, timer = 0;
+  let ctx: AudioContext | null = null;
+  let nextBeat = 0;
+  const now = () => (running ? pos + (performance.now() - startedAt) / 1000 : pos);
+  const schedule = () => {
+    // look ahead 200 ms and queue clicks on upcoming beats
+    const t = now();
+    while (nextBeat < a.beats.length && a.beats[nextBeat] < t + 0.2) {
+      const at = a.beats[nextBeat];
+      if (at >= t - 0.02 && ctx) {
+        const when = ctx.currentTime + Math.max(0, at - t);
+        const osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.frequency.value = (nextBeat - a.downbeat) % a.meter === 0 ? 1500 : 1000;
+        gain.gain.setValueAtTime(0.25, when);
+        gain.gain.exponentialRampToValueAtTime(0.001, when + 0.05);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(when);
+        osc.stop(when + 0.06);
+      }
+      nextBeat++;
+    }
+    if (t >= a.duration) clock.pause();
+  };
+  const clock: Clock = {
+    now,
+    seek: (t) => {
+      pos = t;
+      startedAt = performance.now();
+      nextBeat = beatAt(a.beats, t) + 1;
+    },
+    play: () => {
+      if (running) return;
+      ctx ??= new AudioContext();
+      void ctx.resume();
+      startedAt = performance.now();
+      nextBeat = beatAt(a.beats, pos) + 1;
+      running = true;
+      timer = window.setInterval(schedule, 50);
+      setPlaying(true);
+    },
+    pause: () => {
+      if (!running) return;
+      pos = now();
+      running = false;
+      clearInterval(timer);
+      setPlaying(false);
+    },
+  };
+  return clock;
 }

@@ -9,11 +9,11 @@ import { chordName, parseLabel, labelFromIndex, detectKey, keyName, capoOptions 
 const [, , input, outPath] = process.argv;
 const buf = readFileSync(input);
 const y = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-const b = readFileSync("public/model/cqt_basis.bin");
+const b = readFileSync("public/model/cqt_basis.v1.bin");
 const basis = parseBasis(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
-const meta: ModelMeta = JSON.parse(readFileSync("public/model/btc170.json", "utf8"));
+const meta: ModelMeta = JSON.parse(readFileSync("public/model/btc170.v1.json", "utf8"));
 
-const session = await ort.InferenceSession.create("public/model/btc170.onnx");
+const session = await ort.InferenceSession.create("public/model/btc170.v1.onnx");
 const t0 = Date.now();
 const res = await analyze(y, basis, meta, async (x) => {
   const out = await session.run({ x: new ort.Tensor("float32", x, [1, 108, 144]) });

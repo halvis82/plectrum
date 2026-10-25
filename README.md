@@ -16,29 +16,54 @@ All audio analysis runs in the browser (a Web Worker), so there is no server com
 
 Key detection (Krumhansl), capo suggestions (open-chord friendliness), transpose and simplify (All / 7ths / Basic) all run client-side from the stored analysis (`src/lib/music.ts`).
 
-### Why YouTube audio is captured in the browser
+### Links: paste and it plays
 
-YouTube blocks audio downloads from cloud IPs. Tested and confirmed on Vercel (with and without BotGuard PO tokens) and on GitHub Actions: every music video returns "Sign in to confirm you're not a bot". So the link flow embeds the video and records it in real time:
+YouTube blocks audio downloads from cloud IPs. This was tested on Vercel (with and without BotGuard PO tokens), on GitHub Actions, and through public Invidious, Piped and cobalt instances. Every one hits "Sign in to confirm you're not a bot", is down, or needs auth. So a pasted link plays in an embedded player while ChordCatch listens:
 
-- **Desktop Chrome/Edge**: captures the tab's own audio (`getDisplayMedia`), the cleanest signal.
-- **Phones and other browsers**: listens through the microphone.
+- **Paste is the only step.** The paste itself is the user gesture, so the browser's share prompt opens at once while the link resolves. A typed link resolves on its own and shows a single Start button.
+- **Desktop Chrome/Edge** captures this tab's audio (`getDisplayMedia`). Phones and other browsers listen through the mic.
+- **Live chords** appear about 2 s after the music starts. The model runs on a sliding 10 s window every 1.5 s, so you can play along during the capture.
+- **Silent intros are skipped** (tab capture is digitally silent there), and capture stops on its own when a video's outro goes quiet.
+- The player is driven over the embed's postMessage protocol on youtube-nocookie.com (`src/lib/youtube.ts`), with no `www.youtube.com/iframe_api`. It works on networks or hosts files that block youtube.com.
+- Player time is polled during capture and the recording is re-laid onto the video timeline (`alignToVideo`), so ads, buffering and seeks drop out and saved chords line up with playback.
+- Videos that block embedding (Vevo) fall through to other uploads of the same song. That search only runs when needed, so the common case is fast.
 
-Player time is polled during capture and the recording is re-laid onto the video timeline (`alignToVideo`), so ads, buffering and seeks are dropped and the saved chords line up with playback. Videos that block embedding (Vevo) automatically fall back to another upload of the same song.
+**Spotify links** are matched to YouTube: the track page gives title and artist, then a YouTube search picks the audio. "Catch that tab" records any other tab, for example the Spotify web player.
 
-**Spotify links** are matched to YouTube: the track page gives title and artist, then a YouTube search picks the audio. Record mode can also capture any browser tab (for example the Spotify web player).
+**Lyrics** come from [LRCLIB](https://lrclib.net) (free, time synced). Chords are placed over lyric lines by timestamp, with an offset control for versions whose timing differs.
 
-**Lyrics** come from [LRCLIB](https://lrclib.net) (free, time-synced). Chords are placed over lyric lines by timestamp, with an offset control for versions whose timing differs.
+Songs without audio on the current device (uploaded or recorded elsewhere, or YouTube unreachable) get a silent play-along clock with a metronome click, so the sheet still follows the beat.
 
-## Accuracy checks
+## Accuracy
 
-`npx tsx scripts/synth-test.mts [--mic]` synthesizes strummed guitar (real voicings, bass, kick) over a known progression with 7ths, sus and minor chords:
+### Real acoustic guitar: GuitarSet
 
-| | tempo | beats | root + maj/min | exact chord |
+All 180 comping excerpts of [GuitarSet](https://zenodo.org/records/3371780) (CC BY 4.0, 6 players x 5 styles, mic recordings) scored with mir_eval against the instructed chords. Decoder settings were tuned on players 00-02; players 03-05 are held out:
+
+| beat-level sheet | root | majmin | sevenths | mirex |
 |---|---|---|---|---|
-| clean | 99.7 / 100 | 128 / 128 | 100% | 75% |
-| simulated phone mic | 99.8 / 100 | 128 / 128 | 96.9% | 75% |
+| tuning half | 87.9 | 82.6 | 74.7 | 79.7 |
+| held-out half | 72.5 | 71.4 | 62.7 | 70.8 |
+| held-out, before tuning | 70.4 | 69.5 | 60.9 | 69.0 |
+
+What helped: pitch-shift test-time augmentation (the model also hears the audio +-1 semitone and the predictions are rotated back and averaged), a "no chord" penalty that stops muted strumming from reading as silence (gated off for genuinely quiet audio), and lighter change penalties. Singer-songwriter and rock styles score highest; funk and jazz voicings are hardest.
+
+```bash
+npx tsx scripts/guitarset-bench.mts <f32 dir> <out dir>              # full pipeline per file
+python -I scripts/guitarset-score.py <jams dir> <out dir>             # detailed report
+npx tsx scripts/guitarset-tune.mts <f32 dir> <out root> -1,0,1        # decoder sweep
+python -I scripts/guitarset-sweep.py <jams dir> <out root>            # tuning vs held-out table
+```
+
+### Synthetic check
+
+`npx tsx scripts/synth-test.mts [--mic]` synthesizes strummed guitar over a known progression. Tempo comes out 99.7 vs 100 BPM with all 128 beats found, and root plus major/minor is 100% both clean and through a simulated phone mic.
 
 `npx tsx scripts/analyze-file.mts audio.f32` prints a bar chart for any raw mono 22.05 kHz float32 file (`ffmpeg -i song.mp3 -ac 1 -ar 22050 -f f32le song.f32`).
+
+### End to end
+
+`ADMIN_TOKEN=... node scripts/e2e.mjs <url> <fake-mic.wav> <song file> <screenshot dir>` drives headless Chromium through paste-to-capture (YouTube, a Vevo-blocked video, Spotify), a typed link, upload, Listen on a phone, the play-along fallback and a bad link. It feeds a fake microphone from a WAV file, so no OS capture prompts are triggered. The app never offers tab capture to HeadlessChrome.
 
 ## Development
 

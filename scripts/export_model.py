@@ -1,9 +1,9 @@
 # Exports the BTC large-vocabulary chord model (github.com/jayg996/BTC-ISMIR19, MIT) for the browser.
 # Usage: python scripts/export_model.py <path to BTC-ISMIR19 checkout> public/model
 # Needs: torch librosa onnx onnxruntime pyyaml
-#   btc170.onnx   x[1,108,144] normalized log-CQT -> logp[1,108,170]
-#   btc170.json   feature mean/std and the 170 chord labels
-#   cqt_basis.bin sparse librosa CQT kernel (layout documented in src/lib/analysis/cqt.ts)
+#   btc170.v1.onnx   x[1,108,144] normalized log-CQT -> logp[1,108,170]
+#   btc170.v1.json   feature mean/std and the 170 chord labels
+#   cqt_basis.v1.bin sparse librosa CQT kernel (layout documented in src/lib/analysis/cqt.ts)
 import json
 import sys
 
@@ -40,11 +40,11 @@ class Export(torch.nn.Module):
         return torch.log_softmax(self.m.output_layer.output_projection(h), -1)
 
 
-torch.onnx.export(Export(model).eval(), torch.randn(1, 108, 144), f"{out}/btc170.onnx",
+torch.onnx.export(Export(model).eval(), torch.randn(1, 108, 144), f"{out}/btc170.v1.onnx",
                   input_names=["x"], output_names=["logp"], opset_version=17, dynamo=False)
 labels = idx2voca_chord()
 json.dump({"mean": float(ckpt["mean"]), "std": float(ckpt["std"]), "labels": [labels[i] for i in range(170)]},
-          open(f"{out}/btc170.json", "w"))
+          open(f"{out}/btc170.v1.json", "w"))
 
 # ---- CQT kernel, identical to librosa.cqt(sr=22050, n_bins=144, bins_per_octave=24) at full rate ----
 SR, NB, BPO = 22050, 144, 24
@@ -62,7 +62,7 @@ for b in range(NB):
     v = basis[b, s:e] / np.sqrt(lengths[b])  # librosa's scale=True
     vals.append(np.stack([v.real, v.imag], -1).astype(np.float32).ravel())
 header = np.array([NB, n_fft] + [x for pair in zip(starts, counts) for x in pair], dtype=np.int32)
-with open(f"{out}/cqt_basis.bin", "wb") as f:
+with open(f"{out}/cqt_basis.v1.bin", "wb") as f:
     f.write(header.tobytes())
     f.write(np.concatenate(vals).tobytes())
 print("exported to", out)

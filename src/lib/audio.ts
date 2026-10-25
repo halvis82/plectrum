@@ -1,8 +1,8 @@
 "use client";
-// Browser audio plumbing: decoding, resampling, recording and running the analysis worker.
+// Browser audio plumbing: decoding, capture streams, the analysis worker and local storage.
 
 import type { Analysis } from "./analysis/analyze";
-import type { WorkerMessage } from "./analysis/worker";
+import type { WorkerMessage, WorkerRequest } from "./analysis/worker";
 
 export const SR = 22050;
 
@@ -27,34 +27,55 @@ export async function decodeToMono(data: Blob | ArrayBuffer): Promise<Float32Arr
 
 export type Stage = "model" | "features" | "chords" | "beats";
 
-export function analyzeSamples(samples: Float32Array, onProgress?: (stage: Stage, p: number) => void): Promise<Analysis> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
-      const m = e.data;
-      if (m.type === "progress") onProgress?.(m.stage, m.p);
-      else {
-        worker.terminate();
-        if (m.type === "done") resolve(m.result);
-        else reject(new Error(m.message));
-      }
-    };
-    worker.onerror = (e) => {
-      worker.terminate();
-      reject(new Error(e.message || "Analysis worker crashed"));
-    };
-    worker.postMessage({ type: "analyze", samples }, [samples.buffer]);
-  });
+/** A long-lived analysis worker. Model loading starts as soon as it is created. */
+export class Analyzer {
+  private worker = new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" });
+  private next = 1;
+  private pending = new Map<number, (m: WorkerMessage) => void>();
+  readonly ready: Promise<void>;
+
+  constructor() {
+    this.worker.onmessage = (e: MessageEvent<WorkerMessage>) => this.pending.get(e.data.id)?.(e.data);
+    this.ready = this.call({ type: "load" }, () => {}).then(() => undefined);
+  }
+
+  private call(req: Omit<WorkerRequest, "id"> & { samples?: Float32Array }, onMsg: (m: WorkerMessage) => void): Promise<WorkerMessage> {
+    const id = this.next++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, (m) => {
+        if (m.type === "progress") return onMsg(m);
+        this.pending.delete(id);
+        if (m.type === "error") reject(new Error(m.message));
+        else resolve(m);
+      });
+      this.worker.postMessage({ ...req, id } as WorkerRequest, req.samples ? [req.samples.buffer] : []);
+    });
+  }
+
+  async analyze(samples: Float32Array, onProgress?: (stage: Stage, p: number) => void): Promise<Analysis> {
+    const m = await this.call({ type: "analyze", samples }, (m) => m.type === "progress" && onProgress?.(m.stage, m.p));
+    if (m.type !== "done") throw new Error("Unexpected worker reply");
+    return m.result;
+  }
+
+  /** Chord class per CQT frame for the last <=10 s of audio, plus the frame hop in seconds. */
+  async live(samples: Float32Array): Promise<{ frames: Int32Array; hop: number }> {
+    const m = await this.call({ type: "live", samples }, () => {});
+    if (m.type !== "live") throw new Error("Unexpected worker reply");
+    return { frames: m.frames, hop: m.hop };
+  }
+
+  terminate() {
+    this.worker.terminate();
+  }
 }
 
-// ---------- recording ----------
-
-export type AudioSource = "mic" | "tab";
+// ---------- capture streams ----------
 
 /** Mic with all voice processing off so music is captured as-is. */
-export async function getMicStream(): Promise<MediaStream> {
+export function getMicStream(): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
 }
 
@@ -66,74 +87,21 @@ export async function getTabStream(currentTab = true): Promise<MediaStream> {
     // Chrome-only hints: offer the current tab first and keep sound playing locally
     ...({ preferCurrentTab: currentTab, selfBrowserSurface: currentTab ? "include" : "exclude", systemAudio: "include", suppressLocalAudioPlayback: false } as object),
   } as DisplayMediaStreamOptions);
+  // only the audio is used; dropping video keeps the "sharing" overhead low
+  stream.getVideoTracks().forEach((t) => (t.enabled = false));
   if (stream.getAudioTracks().length === 0) {
     stream.getTracks().forEach((t) => t.stop());
-    throw new Error('No audio was shared. Pick the tab and make sure "Also share tab audio" is on.');
+    throw new Error('No audio was shared. Try again and keep "Also share tab audio" switched on.');
   }
   return stream;
 }
 
 export function canCaptureTab(): boolean {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getDisplayMedia) return false;
-  // Safari and Firefox expose getDisplayMedia but cannot capture tab audio
   const ua = navigator.userAgent;
-  const mobile = /Android|iPhone|iPad|Mobile/i.test(ua);
-  return !mobile && /Chrome|Chromium|Edg\//.test(ua);
-}
-
-export class Recorder {
-  private rec: MediaRecorder;
-  private chunks: Blob[] = [];
-  private startedAt = 0;
-  readonly level: AnalyserNode;
-  private ctx: AudioContext;
-
-  constructor(private stream: MediaStream) {
-    const audioOnly = new MediaStream(stream.getAudioTracks());
-    const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((m) => MediaRecorder.isTypeSupported(m));
-    this.rec = new MediaRecorder(audioOnly, mime ? { mimeType: mime, audioBitsPerSecond: 128000 } : undefined);
-    this.rec.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
-    this.ctx = new AudioContext();
-    this.level = this.ctx.createAnalyser();
-    this.level.fftSize = 1024;
-    this.ctx.createMediaStreamSource(audioOnly).connect(this.level);
-  }
-
-  start(): Promise<number> {
-    return new Promise((resolve) => {
-      this.rec.onstart = () => {
-        this.startedAt = performance.now();
-        resolve(this.startedAt);
-      };
-      this.rec.start(1000);
-    });
-  }
-
-  /** Seconds since recording started. */
-  elapsed() {
-    return this.startedAt ? (performance.now() - this.startedAt) / 1000 : 0;
-  }
-
-  stop(): Promise<Blob> {
-    return new Promise((resolve) => {
-      this.rec.onstop = () => {
-        this.stream.getTracks().forEach((t) => t.stop());
-        void this.ctx.close();
-        resolve(new Blob(this.chunks, { type: this.rec.mimeType }));
-      };
-      if (this.rec.state !== "inactive") this.rec.stop();
-      else this.rec.onstop(new Event("stop"));
-    });
-  }
-
-  /** 0..1 loudness for a meter. */
-  rms(): number {
-    const buf = new Float32Array(this.level.fftSize);
-    this.level.getFloatTimeDomainData(buf);
-    let s = 0;
-    for (const v of buf) s += v * v;
-    return Math.min(1, Math.sqrt(s / buf.length) * 4);
-  }
+  // Safari and Firefox can't capture tab audio; headless test browsers must never trigger OS capture prompts
+  if (/Android|iPhone|iPad|Mobile|HeadlessChrome/i.test(ua)) return false;
+  return /Chrome|Chromium|Edg\//.test(ua);
 }
 
 // ---------- aligning a capture to the video timeline ----------
@@ -170,6 +138,14 @@ export function alignToVideo(recorded: Float32Array, points: SyncPoint[], videoD
   }
   flush();
   return out;
+}
+
+/** Median recording-minus-video offset over recent steady playback (for live display). */
+export function currentOffset(points: SyncPoint[]): number | null {
+  const recent = points.filter((p) => p.playing).slice(-20);
+  if (recent.length < 3) return null;
+  const o = recent.map((p) => p.rec - p.video).sort((a, b) => a - b);
+  return o[Math.floor(o.length / 2)];
 }
 
 // ---------- local audio for playback of uploads/recordings (this device only) ----------

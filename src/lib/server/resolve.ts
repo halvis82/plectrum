@@ -60,22 +60,27 @@ async function spotifyMeta(url: string) {
   return { title: decode(title), artist: desc ? decode(desc.split(" · ")[0]) : null };
 }
 
-async function searchVideos(query: string): Promise<string[]> {
+// one client per warm function instance; creating it costs a round trip to YouTube
+let client: Promise<Innertube> | null = null;
+const yt = () => (client ??= Innertube.create({ retrieve_player: false }).catch((e) => ((client = null), Promise.reject(e))));
+
+export async function searchVideos(query: string): Promise<string[]> {
   try {
-    const yt = await Innertube.create({ retrieve_player: false });
-    const res = await yt.search(query, { type: "video" });
+    const res = await (await yt()).search(query, { type: "video" });
     return res.videos.flatMap((v) => ("id" in v && typeof v.id === "string" ? [v.id] : [])).slice(0, 8);
   } catch {
     return [];
   }
 }
 
-export async function resolveLink(input: string): Promise<Resolved> {
+/** Alternatives (other uploads of the same song) are only searched when asked for: the client
+ * asks when the first video refuses to embed, which keeps the common case fast. */
+export async function resolveLink(input: string, withAlternatives = false): Promise<Resolved> {
   const id = youtubeId(input);
   if (id) {
     const meta = await youtubeMeta(id);
     const { title, artist } = splitTitle(meta.title, meta.author_name);
-    const alternatives = (await searchVideos(`${artist ?? ""} ${title}`.trim())).filter((v) => v !== id);
+    const alternatives = withAlternatives ? (await searchVideos(`${artist ?? ""} ${title}`.trim())).filter((v) => v !== id) : [];
     return { kind: "youtube", videoId: id, title, artist, sourceUrl: `https://www.youtube.com/watch?v=${id}`, alternatives };
   }
   let u: URL;
