@@ -15,7 +15,9 @@ export function buildBars(a: Analysis): Bar[] {
   const isEmpty = (b: Bar) => b.beats.every((i) => parseLabel(labelFromIndex(a.chords[i])) === null);
   while (bars.length && isEmpty(bars[0])) bars.shift();
   while (bars.length && isEmpty(bars[bars.length - 1])) bars.pop();
-  return bars;
+  // number full bars from 1 after trimming (a leading pickup keeps index 0)
+  let num = 0;
+  return bars.map((b) => ({ ...b, index: b.pickup ? 0 : ++num }));
 }
 
 export type View = { transpose: number; capo: number; simplify: Simplify };

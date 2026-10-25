@@ -7,6 +7,8 @@ export type Resolved = {
   title: string;
   artist: string | null;
   sourceUrl: string;
+  /** other uploads of the same song, tried in order when a video refuses to embed (e.g. Vevo) */
+  alternatives: string[];
 };
 
 export function youtubeId(input: string): string | null {
@@ -58,12 +60,23 @@ async function spotifyMeta(url: string) {
   return { title: decode(title), artist: desc ? decode(desc.split(" · ")[0]) : null };
 }
 
+async function searchVideos(query: string): Promise<string[]> {
+  try {
+    const yt = await Innertube.create({ retrieve_player: false });
+    const res = await yt.search(query, { type: "video" });
+    return res.videos.flatMap((v) => ("id" in v && typeof v.id === "string" ? [v.id] : [])).slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
 export async function resolveLink(input: string): Promise<Resolved> {
   const id = youtubeId(input);
   if (id) {
     const meta = await youtubeMeta(id);
     const { title, artist } = splitTitle(meta.title, meta.author_name);
-    return { kind: "youtube", videoId: id, title, artist, sourceUrl: `https://www.youtube.com/watch?v=${id}` };
+    const alternatives = (await searchVideos(`${artist ?? ""} ${title}`.trim())).filter((v) => v !== id);
+    return { kind: "youtube", videoId: id, title, artist, sourceUrl: `https://www.youtube.com/watch?v=${id}`, alternatives };
   }
   let u: URL;
   try {
@@ -76,11 +89,9 @@ export async function resolveLink(input: string): Promise<Resolved> {
     if (!m && u.hostname !== "spotify.link") throw new Error("That Spotify link is not a single song. Open the song and use Share > Copy link.");
     const url = m ? `https://open.spotify.com/track/${m[1]}` : u.toString();
     const { title, artist } = await spotifyMeta(url);
-    const yt = await Innertube.create({ retrieve_player: false });
-    const res = await yt.search(`${artist ?? ""} ${title} audio`.trim(), { type: "video" });
-    const hit = res.videos.find((v) => "id" in v && typeof v.id === "string") as { id: string } | undefined;
-    if (!hit) throw new Error(`Couldn't find "${title}" on YouTube.`);
-    return { kind: "spotify", videoId: hit.id, title, artist, sourceUrl: url };
+    const [first, ...alternatives] = await searchVideos(`${artist ?? ""} ${title} audio`.trim());
+    if (!first) throw new Error(`Couldn't find "${title}" on YouTube.`);
+    return { kind: "spotify", videoId: first, title, artist, sourceUrl: url, alternatives };
   }
   throw new Error("Only YouTube and Spotify links are supported. For anything else, upload the file or record it.");
 }

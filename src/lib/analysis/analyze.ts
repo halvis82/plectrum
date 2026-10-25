@@ -4,6 +4,9 @@ import { estimateTempo, onsetEnvelope, trackBeats } from "./beats";
 import { FRAMES_PER_CHUNK, N_BINS, SR, frameTimes, logCqt, type CqtBasis } from "./cqt";
 import { N_CLASSES, beatChords, toSegments, viterbi, type Segment } from "./decode";
 
+/** How much (mean log-prob per beat) a 7th/sus/6th must beat the plain triad by to be shown. */
+export const EXTENSION_MARGIN = 1.5;
+
 export type ModelMeta = { mean: number; std: number; labels: string[] };
 /** Runs BTC on one window (108 x 144 normalized features) and returns 108 x 170 log-probs. */
 export type RunWindow = (x: Float32Array) => Promise<Float32Array>;
@@ -60,7 +63,7 @@ export async function analyze(y: Float32Array, basis: CqtBasis, meta: ModelMeta,
     const pos = (((i - downbeat) % meter) + meter) % meter;
     return pos === 0 ? 1 : meter === 4 && pos === 2 ? 2 : 3;
   });
-  const chords = Array.from(beatChords(logp, times, beats, duration, penalties));
+  const chords = Array.from(beatChords(logp, times, beats, duration, penalties, EXTENSION_MARGIN));
   onProgress?.("beats", 1);
   return { v: 1, duration: round(duration), bpm: Math.round(bpm * 10) / 10, meter, downbeat, beats: beats.map(round), chords, segments };
 }

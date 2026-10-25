@@ -58,13 +58,13 @@ export async function getMicStream(): Promise<MediaStream> {
   });
 }
 
-/** Desktop Chrome/Edge: capture this tab's (or another tab's) audio. */
-export async function getTabStream(): Promise<MediaStream> {
+/** Desktop Chrome/Edge: capture this tab's (or, with currentTab false, any tab's) audio. */
+export async function getTabStream(currentTab = true): Promise<MediaStream> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: true,
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     // Chrome-only hints: offer the current tab first and keep sound playing locally
-    ...({ preferCurrentTab: true, selfBrowserSurface: "include", systemAudio: "include", suppressLocalAudioPlayback: false } as object),
+    ...({ preferCurrentTab: currentTab, selfBrowserSurface: currentTab ? "include" : "exclude", systemAudio: "include", suppressLocalAudioPlayback: false } as object),
   } as DisplayMediaStreamOptions);
   if (stream.getAudioTracks().length === 0) {
     stream.getTracks().forEach((t) => t.stop());

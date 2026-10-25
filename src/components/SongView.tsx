@@ -290,7 +290,7 @@ function BarsSheet({
             onClick={() => onSeek?.(bar.beats[0])}
             className={`relative text-left bg-surface px-2.5 pt-5 pb-2.5 min-h-16 ${isCur ? "bg-accent-soft" : ""} ${onSeek ? "hover:bg-surface-2" : "cursor-default"}`}
           >
-            <span className="absolute top-1 left-2 text-[10px] text-muted tabular-nums">{bar.pickup ? "pickup" : bar.index + (bars[0].pickup ? 0 : 1)}</span>
+            <span className="absolute top-1 left-2 text-[10px] text-muted tabular-nums">{bar.pickup ? "pickup" : bar.index}</span>
             <div className="grid" style={{ gridTemplateColumns: `repeat(${a.meter}, minmax(0, 1fr))` }}>
               {cells.map((c, k) => (
                 <span

@@ -123,11 +123,14 @@ type ModeProps = {
 
 // ---------------- link (YouTube / Spotify) ----------------
 
-type Resolved = { kind: "youtube" | "spotify"; videoId: string; title: string; artist: string | null; sourceUrl: string };
+type Resolved = { kind: "youtube" | "spotify"; videoId: string; title: string; artist: string | null; sourceUrl: string; alternatives: string[] };
 
 function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
   const [url, setUrl] = useState("");
   const [resolved, setResolved] = useState<Resolved | null>(null);
+  // index into [videoId, ...alternatives]: blocked embeds (Vevo etc.) fall through to the next upload
+  const [candidate, setCandidate] = useState(0);
+  const videoId = resolved ? [resolved.videoId, ...resolved.alternatives][candidate] : null;
   const [loading, setLoading] = useState(false);
   const tabOk = useSyncExternalStore(noop, canCaptureTab, () => false);
   const [pref, setMethod] = useState<"tab" | "mic" | null>(null);
@@ -138,13 +141,16 @@ function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
   const stopRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (!resolved || !playerEl.current) return;
+    if (!resolved || !videoId || !playerEl.current) return;
     const host = document.createElement("div");
     playerEl.current.replaceChildren(host);
     let cancelled = false;
-    createPlayer(host, resolved.videoId, (s) => s === YT_STATE.ENDED && stopRef.current?.(), (code) =>
-      setError(code === 101 || code === 150 ? "This video doesn't allow playback on other sites. Try another upload of the same song." : `YouTube error ${code}`),
-    ).then((p) => {
+    const fallbacks = resolved.alternatives.length - candidate;
+    createPlayer(host, videoId, (s) => s === YT_STATE.ENDED && stopRef.current?.(), (code) => {
+      if (stopRef.current) return;
+      if ((code === 101 || code === 150 || code === 100) && fallbacks > 0) setCandidate((c) => c + 1);
+      else setError(code === 101 || code === 150 ? "None of the YouTube uploads of this song allow playback on other sites. Use Record > Browser tab and play it on youtube.com instead." : `YouTube error ${code}`);
+    }).then((p) => {
       if (cancelled) p.destroy();
       else player.current = p;
     });
@@ -153,7 +159,7 @@ function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
       player.current?.destroy();
       player.current = null;
     };
-  }, [resolved, setError]);
+  }, [resolved, videoId, candidate, setError]);
 
   async function resolve(e: React.FormEvent) {
     e.preventDefault();
@@ -161,6 +167,7 @@ function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
     setError(null);
     setLoading(true);
     setResolved(null);
+    setCandidate(0);
     try {
       const r = await fetch(`/api/resolve?url=${encodeURIComponent(url.trim())}`);
       const body = await r.json();
@@ -175,7 +182,7 @@ function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
 
   async function start() {
     const p = player.current;
-    if (!p || !resolved) return;
+    if (!p || !resolved || !videoId) return;
     setError(null);
     let stream: MediaStream;
     try {
@@ -219,7 +226,7 @@ function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
           artist: resolved.artist,
           source: resolved.kind,
           sourceUrl: resolved.sourceUrl,
-          youtubeId: resolved.videoId,
+          youtubeId: videoId,
         });
       } catch (err) {
         setBusy(null);
@@ -259,6 +266,9 @@ function LinkMode({ busy, setBusy, setError, finish }: ModeProps) {
             <span className="text-fg font-medium">{resolved.title}</span>
             {resolved.artist ? ` · ${resolved.artist}` : ""}
           </p>
+          {candidate > 0 && (
+            <p className="text-xs text-muted mb-2">The original video blocks playback on other sites, so this is another upload of the same song.</p>
+          )}
           <div ref={playerEl} className="aspect-video w-full rounded-2xl overflow-hidden bg-black" />
 
           {!busy && (
@@ -368,6 +378,8 @@ function UploadMode({ busy, setBusy, setError, finish }: ModeProps) {
 
 function RecordMode({ busy, setBusy, setError, finish }: ModeProps) {
   const [rec, setRec] = useState<Recorder | null>(null);
+  const [source, setSource] = useState<"record" | "tab">("record");
+  const tabOk = useSyncExternalStore(noop, canCaptureTab, () => false);
   const [t, setT] = useState(0);
   const [level, setLevel] = useState(0);
 
@@ -383,26 +395,32 @@ function RecordMode({ busy, setBusy, setError, finish }: ModeProps) {
     return () => cancelAnimationFrame(raf);
   }, [rec]);
 
-  async function toggle() {
+  async function begin(from: "record" | "tab") {
     setError(null);
-    if (!rec) {
-      try {
-        const r = new Recorder(await getMicStream());
-        await r.start();
-        setRec(r);
-      } catch {
-        setError("Microphone permission is needed to record.");
-      }
-      return;
+    try {
+      const stream = from === "tab" ? await getTabStream(false) : await getMicStream();
+      const r = new Recorder(stream);
+      await r.start();
+      setSource(from);
+      setRec(r);
+      // the browser's own "Stop sharing" button finishes the recording too
+      stream.getAudioTracks()[0]?.addEventListener("ended", () => document.getElementById("cc-rec-stop")?.click());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(from === "tab" && !/NotAllowed|denied/i.test(msg) ? msg : from === "tab" ? "Tab sharing was cancelled." : "Microphone permission is needed to record.");
     }
+  }
+
+  async function toggle() {
+    if (!rec) return begin("record");
     setRec(null);
     setBusy({ label: "Reading the recording" });
     try {
       const blob = await rec.stop();
       const samples = await decodeToMono(blob);
       const now = new Date();
-      const title = `Recording ${now.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
-      await finish(samples, { title, artist: null, source: "record" }, blob);
+      const title = `${source === "tab" ? "Tab capture" : "Recording"} ${now.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+      await finish(samples, { title, artist: null, source }, blob);
     } catch (err) {
       setBusy(null);
       setError(err instanceof Error ? err.message : String(err));
@@ -412,6 +430,7 @@ function RecordMode({ busy, setBusy, setError, finish }: ModeProps) {
   return (
     <div className="flex flex-col items-center py-4">
       <button
+        id="cc-rec-stop"
         onClick={toggle}
         disabled={!!busy}
         aria-label={rec ? "Stop recording" : "Start recording"}
@@ -430,8 +449,20 @@ function RecordMode({ busy, setBusy, setError, finish }: ModeProps) {
           )}
         </span>
       </button>
-      <p className="mt-4 text-sm tabular-nums">{rec ? `Recording ${fmt(t)}  ·  tap to finish` : "Tap to record what's playing around you"}</p>
-      <p className="mt-1 text-xs text-muted text-center max-w-xs">Hold your phone near the speaker. 30 seconds or more gives the best results.</p>
+      <p className="mt-4 text-sm tabular-nums">
+        {rec ? `${source === "tab" ? "Capturing tab" : "Recording"} ${fmt(t)}  ·  tap to finish` : "Tap to record what's playing around you"}
+      </p>
+      {!rec && <p className="mt-1 text-xs text-muted text-center max-w-xs">Hold your phone near the speaker. 30 seconds or more gives the best results.</p>}
+      {!rec && tabOk && (
+        <div className="mt-5 pt-5 border-t border-line w-full text-center">
+          <button disabled={!!busy} onClick={() => begin("tab")} className="rounded-xl border border-line px-4 py-2.5 font-medium disabled:opacity-50">
+            Capture a browser tab instead
+          </button>
+          <p className="mt-2 text-xs text-muted max-w-sm mx-auto">
+            Play the song in another tab (youtube.com, Spotify web player, anything), pick that tab when Chrome asks, and keep <b>Also share tab audio</b> on. Start from the beginning for the full song.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

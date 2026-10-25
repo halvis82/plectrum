@@ -60,6 +60,7 @@ export function beatChords(
   beats: number[],
   duration: number,
   switchPenalty: number | ArrayLike<number> = 2.5,
+  extensionMargin = 0,
 ): Int32Array {
   const B = beats.length;
   const C = N_CLASSES;
@@ -82,5 +83,30 @@ export function beatChords(
       for (let c = 0; c < C; c++) acc[c] /= n;
     }
   }
-  return viterbi(obs, B, C, switchPenalty);
+  const path = viterbi(obs, B, C, switchPenalty);
+  return extensionMargin > 0 ? preferTriads(path, obs, C, extensionMargin) : path;
+}
+
+const MINORISH = new Set([0, 2, 4, 6, 7, 10, 11]); // min dim min6 min7 minmaj7 dim7 hdim7
+
+/**
+ * Noisy audio tends to invent 7ths and suspensions. For every run of the same extended
+ * chord, keep it only if it beats the plain major/minor triad on the same root by `margin`
+ * (mean log-prob per beat); otherwise fall back to the triad.
+ */
+export function preferTriads(path: Int32Array, obs: Float32Array, C: number, margin: number): Int32Array {
+  const out = path.slice();
+  for (let start = 0; start < path.length; ) {
+    let end = start;
+    while (end < path.length && path[end] === path[start]) end++;
+    const cls = path[start];
+    if (cls < 168 && cls % 14 > 1) {
+      const triad = Math.floor(cls / 14) * 14 + (MINORISH.has(cls % 14) ? 0 : 1);
+      let diff = 0;
+      for (let t = start; t < end; t++) diff += obs[t * C + cls] - obs[t * C + triad];
+      if (diff / (end - start) < margin) out.fill(triad, start, end);
+    }
+    start = end;
+  }
+  return out;
 }
