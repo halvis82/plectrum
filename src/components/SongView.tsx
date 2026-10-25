@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
 import { loadLocalAudio } from "@/lib/audio";
-import { keyName, type Simplify } from "@/lib/music";
+import { capoOptions, keyName, transpose, type Simplify } from "@/lib/music";
 import {
   beatAt,
   buildBars,
@@ -32,7 +32,8 @@ type Clock = { now: () => number; seek: (t: number) => void; play: () => void; p
 
 function usePrefs(id: string) {
   const storageKey = `cc:view:${id}`;
-  const [view, setView] = useState<View & { mode: "bars" | "lyrics"; follow: boolean; lyricOffset: number } | null>(null);
+  // capo null = auto: follow the easiest capo for the current transposition
+  const [view, setView] = useState<(Omit<View, "capo"> & { capo: number | null; mode: "bars" | "lyrics"; follow: boolean; lyricOffset: number }) | null>(null);
   const update = useCallback(
     (patch: Partial<NonNullable<typeof view>>) =>
       setView((v) => {
@@ -58,8 +59,8 @@ export function SongView({ song }: { song: SongData }) {
     try {
       saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
     } catch {}
-    setView(saved ?? { transpose: 0, capo: stats.capo[0].capo, simplify: "full", mode: "bars", follow: true, lyricOffset: 0 });
-  }, [storageKey, setView, stats]);
+    setView(saved ?? { transpose: 0, capo: null, simplify: "full", mode: "bars", follow: true, lyricOffset: 0 });
+  }, [storageKey, setView]);
 
   // ---- playback ----
   const [clock, setClock] = useState<Clock | null>(null);
@@ -126,7 +127,13 @@ export function SongView({ song }: { song: SongData }) {
       .catch(() => setLyrics(null));
   }, [song.title, song.artist, a.duration]);
 
-  const shape = useMemo(() => (view ? makeShapeFn(a, view, stats.key) : null), [a, view, stats.key]);
+  const transposeBy = view?.transpose ?? 0;
+  const bestCapo = useMemo(
+    () => capoOptions(stats.items.map((i) => ({ chord: transpose(i.chord, transposeBy), dur: i.dur })))[0].capo,
+    [stats, transposeBy],
+  );
+  const capo = view?.capo ?? bestCapo;
+  const shape = useMemo(() => (view ? makeShapeFn(a, { ...view, capo }, stats.key) : null), [a, view, capo, stats.key]);
   const names = useCallback((c: number) => shape!(c).name, [shape]);
 
   if (!view || !shape) return <div className="h-96" />;
@@ -166,14 +173,14 @@ export function SongView({ song }: { song: SongData }) {
         <label className="flex items-center gap-1.5">
           <span className="text-muted">Capo</span>
           <select
-            value={view.capo}
-            onChange={(e) => update({ capo: Number(e.target.value) })}
+            value={view.capo ?? "auto"}
+            onChange={(e) => update({ capo: e.target.value === "auto" ? null : Number(e.target.value) })}
             className="rounded-lg border border-line bg-surface px-2 py-1.5"
           >
+            <option value="auto">Easiest ({bestCapo === 0 ? "none" : bestCapo})</option>
             {Array.from({ length: 10 }, (_, c) => (
               <option key={c} value={c}>
                 {c === 0 ? "None" : c}
-                {c === stats.capo[0].capo ? " ★" : ""}
               </option>
             ))}
           </select>
@@ -199,14 +206,14 @@ export function SongView({ song }: { song: SongData }) {
 
       <p className="mt-3 text-sm text-muted">
         Key <b className="text-fg">{keyName(sounding)}</b> · {Math.round(a.bpm)} BPM · {a.meter}/4
-        {view.capo > 0 && (
+        {capo > 0 && (
           <>
-            {" "}· Capo {view.capo}, shapes in <b className="text-fg">{keyName({ ...sounding, tonic: (sounding.tonic - view.capo + 12) % 12 }).split(" ")[0]}{sounding.mode === "minor" ? "m" : ""}</b>
+            {" "}· Capo {capo}, shapes in <b className="text-fg">{keyName({ ...sounding, tonic: (sounding.tonic - capo + 12) % 12 }).split(" ")[0]}{sounding.mode === "minor" ? "m" : ""}</b>
           </>
         )}
-        {stats.capo[0].capo !== view.capo && (
-          <button className="ml-2 underline" onClick={() => update({ capo: stats.capo[0].capo })}>
-            easiest: capo {stats.capo[0].capo}
+        {view.capo !== null && view.capo !== bestCapo && (
+          <button className="ml-2 underline" onClick={() => update({ capo: null })}>
+            easiest: capo {bestCapo}
           </button>
         )}
       </p>
