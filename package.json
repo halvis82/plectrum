@@ -9,22 +9,30 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
     "bgutils-js": "^4.0.3",
     "jsdom": "^24.1.3",
+    "nanoid": "^5.1.16",
     "next": "16.4.3",
+    "onnxruntime-web": "^1.30.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "server-only": "^0.0.1",
     "youtubei.js": "^18.3.0"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
+    "@tombatossals/chords-db": "^0.5.1",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "onnxruntime-node": "^1.30.0",
+    "playwright": "^1.58.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   },
   "engines": {
