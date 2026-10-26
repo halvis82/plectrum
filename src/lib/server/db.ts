@@ -16,7 +16,7 @@ export type SongSummary = {
   created_at: string;
 };
 
-export type Song = SongSummary & { source_url: string | null; meter: number | null; analysis: Analysis; views: number };
+export type Song = SongSummary & { source_url: string | null; audio_url: string | null; meter: number | null; analysis: Analysis; views: number };
 
 export async function listSongs(q?: string, limit = 60): Promise<SongSummary[]> {
   const pattern = q ? `%${q.replace(/[%_\\]/g, (c) => "\\" + c)}%` : null;
@@ -30,6 +30,6 @@ export async function listSongs(q?: string, limit = 60): Promise<SongSummary[]> 
 
 export async function getSong(id: string): Promise<Song | null> {
   const rows = (await sql`update songs set views = views + 1 where id = ${id}
-    returning id, title, artist, source, source_url, youtube_id, duration, bpm, meter, song_key, analysis, views, created_at`) as Song[];
+    returning id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, views, created_at`) as Song[];
   return rows[0] ?? null;
 }

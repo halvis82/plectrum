@@ -5,6 +5,8 @@ create table if not exists songs (
   source text not null,
   source_url text,
   youtube_id text,
+  -- page /api/media can fetch the audio from again (links other than YouTube)
+  audio_url text,
   duration real not null,
   bpm real,
   meter smallint,

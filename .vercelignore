@@ -4,3 +4,5 @@ node_modules
 .claude
 scripts
 *.tsbuildinfo
+.venv
+__pycache__

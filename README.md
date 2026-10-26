@@ -1,6 +1,6 @@
 # ChordCatch
 
-Guitar chords from any song. Paste a YouTube or Spotify link, upload a file, or record what's playing, and ChordCatch works the chords out from the audio itself. Every result is saved to a public library.
+Guitar chords and tabs from any song. Paste a link (YouTube, Spotify, Apple Music, Deezer, SoundCloud, Bandcamp, Mixcloud, the Internet Archive, a direct audio file, or anything else [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports), upload a file, or record what's playing, and ChordCatch works the chords out from the audio itself. Every result is saved to a public library.
 
 Live: https://chordcatch-seven.vercel.app
 
@@ -18,11 +18,20 @@ Key detection (Krumhansl), capo suggestions (open-chord friendliness), transpose
 
 ### Links
 
-A pasted or typed link starts on its own. The server resolves it (YouTube oEmbed, or Spotify's track page for title and artist, then a YouTube search), streams the audio through `/api/audio/:videoId` with range support (`src/lib/server/youtube-audio.ts`), and the browser analyzes it. The same route plays the song back on its page.
+A pasted or typed link starts on its own. `/api/resolve` sorts it:
 
-YouTube blocks anonymous downloads from cloud IPs (tested on Vercel with and without BotGuard PO tokens, on GitHub Actions, and through public Invidious, Piped and cobalt instances). The server therefore signs in: with browser cookies in `YT_COOKIES_B64` when set, otherwise with device-flow OAuth tokens stored by `/api/admin/youtube-login`. With OAuth only some uploads stream (others answer 403), so when the first video fails the app tries other uploads of the same song. Uploading the file or using Listen always works.
+- **YouTube**: streamed through `/api/audio/:videoId` with range support (`src/lib/server/youtube-audio.ts`), which also plays the song back on its page.
+- **Spotify, Apple Music, Deezer**: these have no downloadable audio, so the title, artist and length come from the track page, the iTunes lookup API or the Deezer API, and the song is fetched from YouTube.
+- **Anything else**: `/api/media?url=` (`src/lib/server/media.ts`) asks the Python function `api/ytdlp.py` to extract the page with yt-dlp, then downloads the audio. Plain files are proxied in ranged chunks. HLS playlists are joined into one file, and MPEG-TS segments are unpacked to raw AAC or MP3, because browsers can't decode TS. Bandcamp shows yt-dlp a bot challenge, so its pages are read as a link-preview crawler instead. Copy-protected tracks (official SoundCloud uploads) are matched by title and length on YouTube.
 
-**Lyrics** come from [LRCLIB](https://lrclib.net) (free, time synced). Chords are placed over lyric lines by timestamp, with an offset control for versions whose timing differs.
+YouTube blocks anonymous downloads from cloud IPs. `/api/audio` tries, in order:
+
+1. YouTube itself, signed in with browser cookies in `YT_COOKIES_B64` when set, otherwise with device-flow OAuth tokens stored by `/api/admin/youtube-login`.
+2. Public [Invidious](https://invidious.io) instances with their API enabled (from `api.invidious.io`, healthiest first), using `local=true` so the instance fetches the stream.
+3. The client then tries up to three other uploads of the same song.
+4. As a last resort, `/api/media?q=&title=&artist=&duration=` takes the first full-length SoundCloud copy whose title and length match. Remixes and other rearrangements are skipped, covers and live takes rank last, and the song page says which copy was used.
+
+The YouTube search behind Spotify and similar links falls back to Invidious search the same way. Uploading the file or using Listen always works.
 
 Songs without audio on the current device (uploaded or recorded elsewhere, or YouTube unreachable) get a silent play-along clock with a metronome click, so the sheet still follows the beat.
 
@@ -85,12 +94,17 @@ python -I scripts/guitarset-sweep.py <jams dir> <out root>            # tuning v
 
 `ADMIN_TOKEN=... node scripts/e2e.mjs <url> <fake-mic.wav> <song file> <screenshot dir>` drives headless Chromium through pasted links (YouTube, a Vevo video, Spotify), a typed link, upload, Listen on a phone, the play-along fallback and a bad link, and checks the tab has notes. It feeds a fake microphone from a WAV file, so no OS prompts are triggered.
 
+`node scripts/e2e-links.mjs <url> <screenshot dir> <link> [<link> ...]` pastes each link, waits for the song page, and reports the time, the number of tab bars, whether the audio loads, and which fallback copy was used, if any.
+
 ## Development
 
 ```bash
 npm install
 vercel env pull .env.local   # DATABASE_URL (Neon) etc.
 npm run dev
+# the yt-dlp function, for /api/media during local development:
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python api/ytdlp.py 5328 &   # then run next with YTDLP_URL=http://127.0.0.1:5328/
 ```
 
 - Database: Neon Postgres via the Vercel Marketplace. Schema in `scripts/schema.sql`.
@@ -101,7 +115,11 @@ npm run dev
 
 | Route | |
 |---|---|
-| `GET /api/resolve?url=` | YouTube/Spotify link to `{ videoId, title, artist, alternatives }` |
+| `GET /api/resolve?url=` | link to `{ kind, videoId, title, artist, alternatives, duration }`; `kind: "web"` means use `/api/media` |
+| `GET /api/resolve?title=&artist=&duration=&url=` | YouTube uploads of a named song |
+| `GET /api/media?url=` | audio from any page yt-dlp supports, described in the `x-media` header |
+| `GET /api/media?q=&title=&artist=&duration=` | best full-length SoundCloud copy of a song |
+| `GET /api/ytdlp?url=` or `?q=` | Python yt-dlp extractor, needs header `x-key: $ADMIN_TOKEN` |
 | `GET /api/songs?q=` | library search |
 | `POST /api/songs` | save an analysis |
 | `PATCH /api/songs/:id` | rename (public) |

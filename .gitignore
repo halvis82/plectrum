@@ -44,3 +44,7 @@ next-env.d.ts
 .agents/
 .claude/skills/
 skills-lock.json
+
+# python (api/ytdlp.py)
+.venv
+__pycache__

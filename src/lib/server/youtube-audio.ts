@@ -97,8 +97,15 @@ export class YouTubeError extends Error {}
 export async function audioSource(videoId: string): Promise<AudioSource> {
   const hit = cache.get(videoId);
   if (hit && hit.expires > Date.now() + 10 * 60_000) return hit;
-  const { yt: innertube, mode, binding } = await yt();
   const problems: string[] = [];
+  const src = (await fromYouTube(videoId, problems).catch((e) => (problems.push(`session: ${e instanceof Error ? e.message : e}`), null))) ?? (await fromInvidious(videoId, problems));
+  if (!src) throw new YouTubeError(problems.join(" | "));
+  cache.set(videoId, src);
+  return src;
+}
+
+async function fromYouTube(videoId: string, problems: string[]): Promise<AudioSource | null> {
+  const { yt: innertube, mode, binding } = await yt();
   for (const name of CLIENT_ORDER[mode]) {
     try {
       const info = await innertube.getBasicInfo(videoId, { client: name });
@@ -135,14 +142,63 @@ export async function audioSource(videoId: string): Promise<AudioSource> {
       }
       if (!url) continue;
       const expires = Number(new URL(url).searchParams.get("expire") ?? 0) * 1000 || Date.now() + 3 * 3600_000;
-      const src: AudioSource = { url, mime: format.mime_type.split(";")[0], bytes: Number(format.content_length ?? 0), client: name, expires, headers };
-      cache.set(videoId, src);
-      return src;
+      return { url, mime: format.mime_type.split(";")[0], bytes: Number(format.content_length ?? 0), client: name, expires, headers };
     } catch (e) {
-      problems.push(`${name}: ${e instanceof Error ? e.message.slice(0, 120) : e}`);
+      problems.push(`[${mode}] ${name}: ${e instanceof Error ? e.message.slice(0, 120) : e}`);
     }
   }
-  throw new YouTubeError(`[${mode}] ${problems.join(" | ")}`);
+  return null;
+}
+
+// ---- Invidious: public YouTube front ends that fetch the stream from their own servers (local=true) ----
+
+const INVIDIOUS_FALLBACK = ["yt.chocolatemoo53.com"];
+let invidiousList: { hosts: string[]; at: number } | null = null;
+
+/** Instances with their API enabled, healthiest first, from the public directory (cached for an hour). */
+export async function invidiousHosts(): Promise<string[]> {
+  if (invidiousList && Date.now() - invidiousList.at < 3600_000) return invidiousList.hosts;
+  let hosts = INVIDIOUS_FALLBACK;
+  try {
+    const list = (await fetch("https://api.invidious.io/instances.json?sort_by=health", { signal: AbortSignal.timeout(5000) }).then((r) => r.json())) as [string, { type: string; api: boolean | null }][];
+    const live = list.filter(([, i]) => i.type === "https" && i.api).map(([h]) => h);
+    hosts = [...new Set([...live, ...INVIDIOUS_FALLBACK])];
+  } catch {}
+  invidiousList = { hosts, at: Date.now() };
+  return hosts;
+}
+
+type InvidiousFormat = { itag: string; type: string; url: string; clen?: string };
+
+async function fromInvidious(videoId: string, problems: string[]): Promise<AudioSource | null> {
+  for (const host of (await invidiousHosts()).slice(0, 5)) {
+    try {
+      const r = await fetch(`https://${host}/api/v1/videos/${videoId}?local=true&fields=adaptiveFormats`, { signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) {
+        problems.push(`invidious ${host}: HTTP ${r.status}`);
+        continue;
+      }
+      const formats = ((await r.json()).adaptiveFormats ?? []) as InvidiousFormat[];
+      // AAC first (decodes everywhere), then Opus
+      const f = ["140", "139", "251", "250", "249"].map((i) => formats.find((x) => x.itag === i)).find(Boolean);
+      if (!f) {
+        problems.push(`invidious ${host}: no audio`);
+        continue;
+      }
+      // the proxy redirects to a media host; keep the final URL so ranged reads skip the redirect
+      const probe = await fetch(new URL(f.url, `https://${host}`), { headers: { range: "bytes=0-1023" }, signal: AbortSignal.timeout(15_000) });
+      await probe.arrayBuffer().catch(() => {});
+      if (!probe.ok) {
+        problems.push(`invidious ${host}: stream HTTP ${probe.status}`);
+        continue;
+      }
+      const bytes = Number(f.clen) || Number(probe.headers.get("content-range")?.split("/")[1]) || 0;
+      return { url: probe.url, mime: f.type.split(";")[0], bytes, client: `invidious:${host}`, expires: Date.now() + 3 * 3600_000, headers: {} };
+    } catch (e) {
+      problems.push(`invidious ${host}: ${e instanceof Error ? e.message.slice(0, 80) : e}`);
+    }
+  }
+  return null;
 }
 
 /** Streams the audio, fetching from YouTube in ranged chunks (whole-file requests get throttled). */

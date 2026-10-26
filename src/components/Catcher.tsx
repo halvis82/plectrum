@@ -8,8 +8,19 @@ import { PcmCapture, encodeWav, resample } from "@/lib/capture";
 import { chordName, detectKey, keyName, labelFromIndex, parseLabel, spellingFor } from "@/lib/music";
 import { songStats } from "@/lib/sheet";
 
-type Resolved = { kind: "youtube" | "spotify"; videoId: string; title: string; artist: string | null; sourceUrl: string; alternatives: string[] };
-type Meta = { title: string; artist: string | null; source: string; sourceUrl?: string; youtubeId?: string };
+type Resolved = {
+  kind: "youtube" | "spotify" | "apple" | "deezer" | "web";
+  videoId: string | null;
+  title: string;
+  artist: string | null;
+  sourceUrl: string;
+  alternatives: string[];
+  duration: number | null;
+};
+type Meta = { title: string; artist: string | null; source: string; sourceUrl?: string; youtubeId?: string; audioUrl?: string };
+/** what /api/media found (its x-media header) */
+type MediaMeta = { title: string; artist: string | null; site: string; page: string | null; duration: number | null; thumbnail: string | null };
+type Card = { title: string; artist: string | null; image: string | null; note?: string };
 
 type Phase =
   | { kind: "idle" }
@@ -24,7 +35,11 @@ const STAGE_LABEL: Record<Stage, string> = {
   notes: "Catching every note",
 };
 
-const LINK_RE = /(youtube\.com|youtu\.be|spotify\.com|spotify\.link)\//i;
+const LINK_RE = /^\s*https?:\/\/[^\s/]+\.[^\s]+/i;
+
+const SITE_NAME: Record<string, string> = { soundcloud: "SoundCloud", bandcamp: "Bandcamp", archiveorg: "the Internet Archive" };
+/** yt-dlp extractor names -> stored source ("generic" is a plain file link) */
+const sourceOf = (site: string) => (site === "generic" ? "web" : site.replace(/[^a-z0-9]/g, "").slice(0, 24) || "web");
 
 /** Live chord timeline while listening: frame-level classes keyed by position. */
 type Live = { hop: number; frames: Map<number, number> };
@@ -34,7 +49,7 @@ export function Catcher() {
   const [url, setUrl] = useState("");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [error, setError] = useState<string | null>(null);
-  const [song, setSong] = useState<Resolved | null>(null);
+  const [song, setSong] = useState<Card | null>(null);
   const [live, setLive] = useState<Live | null>(null);
   const [drag, setDrag] = useState(false);
   const analyzer = useRef<Analyzer | null>(null);
@@ -72,25 +87,69 @@ export function Catcher() {
       let r = await fetch(`/api/resolve?url=${encodeURIComponent(link.trim())}`);
       let resolved: Resolved = await r.json();
       if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
-      setSong(resolved);
+      const progress = (p: number) => setPhase({ kind: "working", label: "Getting the audio", p });
 
+      // any other site: the server downloads it with yt-dlp
+      let site: string | null = null;
+      if (resolved.kind === "web") {
+        setPhase({ kind: "working", label: "Getting the audio" });
+        const got = await download(`/api/media?url=${encodeURIComponent(resolved.sourceUrl)}`, progress);
+        if ("blob" in got) {
+          const m = got.meta!;
+          setSong({ title: m.title, artist: m.artist, image: m.thumbnail });
+          setPhase({ kind: "working", label: "Reading the audio" });
+          const samples = await decodeToMono(got.blob);
+          const page = m.page ?? resolved.sourceUrl;
+          return await finish(samples, { title: m.title, artist: m.artist, source: sourceOf(m.site), sourceUrl: page, audioUrl: page }, got.blob);
+        }
+        // copy-protected there (official SoundCloud uploads): find the same song on YouTube
+        if (!got.song) throw new Error(got.error);
+        site = new URL(resolved.sourceUrl).hostname.replace(/^www\.|^m\./, "").split(".")[0];
+        const q = new URLSearchParams({ title: got.song.title, artist: got.song.artist ?? "", duration: String(got.song.duration ?? ""), url: resolved.sourceUrl });
+        r = await fetch(`/api/resolve?${q}`);
+        resolved = await r.json();
+        if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
+      }
+
+      const ytImage = (id: string | null) => (id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : null);
+      setSong({ title: resolved.title, artist: resolved.artist, image: ytImage(resolved.videoId) });
       let audio: Blob | null = null;
       let videoId = resolved.videoId;
       for (let attempt = 0; attempt < 4 && !audio; attempt++) {
-        if (attempt === 1 && resolved.alternatives.length === 0) {
+        if (attempt === 1 && resolved.alternatives.length === 0 && !site) {
           // only look for other uploads of the song if the first one fails
           r = await fetch(`/api/resolve?alts&url=${encodeURIComponent(resolved.sourceUrl)}`);
           if (r.ok) resolved = await r.json();
         }
         videoId = attempt === 0 ? resolved.videoId : resolved.alternatives[attempt - 1];
         if (!videoId) break;
-        audio = await download(`/api/audio/${videoId}`, (p) => setPhase({ kind: "working", label: "Getting the audio", p }));
+        const got = await download(`/api/audio/${videoId}`, progress);
+        if ("blob" in got) audio = got.blob;
       }
-      if (!audio) throw new Error("YouTube wouldn't give up the audio for this song right now. Try another link, or upload the file.");
+      let meta: Meta = { title: resolved.title, artist: resolved.artist, source: site ? sourceOf(site) : resolved.kind, sourceUrl: resolved.sourceUrl, youtubeId: videoId ?? undefined };
+
+      // YouTube refused every upload: use a full-length copy from SoundCloud instead
+      if (!audio) {
+        setPhase({ kind: "working", label: "Looking for another copy" });
+        const q = new URLSearchParams({ q: `${resolved.artist ?? ""} ${resolved.title}`.trim(), title: resolved.title });
+        if (resolved.artist) q.set("artist", resolved.artist);
+        if (resolved.duration) q.set("duration", String(resolved.duration));
+        const got = await download(`/api/media?${q}`, progress);
+        if ("error" in got) throw new Error("Couldn't get the audio for this song from YouTube or anywhere else right now. Try another link, or upload the file.");
+        const m = got.meta!;
+        audio = got.blob;
+        meta = { ...meta, youtubeId: undefined, audioUrl: m.page ?? undefined };
+        setSong({
+          title: resolved.title,
+          artist: resolved.artist,
+          image: m.thumbnail,
+          note: `YouTube wouldn't share this one, so this uses "${m.title}"${m.artist ? ` by ${m.artist}` : ""} from ${SITE_NAME[m.site] ?? m.site}.`,
+        });
+      }
 
       setPhase({ kind: "working", label: "Reading the audio" });
       const samples = await decodeToMono(audio);
-      await finish(samples, { title: resolved.title, artist: resolved.artist, source: resolved.kind, sourceUrl: resolved.sourceUrl, youtubeId: videoId });
+      await finish(samples, meta, meta.audioUrl ? audio : undefined);
     } catch (e) {
       setSong(null);
       fail(e instanceof Error ? e.message : String(e));
@@ -172,6 +231,7 @@ export function Catcher() {
       let peak = 0;
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       if (samples.length < SR * 3 || peak < 0.003) throw new Error("There wasn't enough music to work with. Give it at least a few seconds.");
+      if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
       const analysis: Analysis = await getAnalyzer().analyze(samples, (stage, p) => setPhase({ kind: "working", label: STAGE_LABEL[stage], p }));
       setPhase({ kind: "working", label: "Saving to the library" });
       const res = await fetch("/api/songs", {
@@ -228,7 +288,7 @@ export function Catcher() {
         <input
           type="url"
           inputMode="url"
-          placeholder="Paste a YouTube or Spotify link"
+          placeholder="Paste a link: YouTube, Spotify, SoundCloud, more"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onPaste={(e) => {
@@ -240,7 +300,7 @@ export function Catcher() {
           }}
           onFocus={() => getAnalyzer()}
           disabled={busy}
-          aria-label="YouTube or Spotify link"
+          aria-label="Song link"
           className="w-full rounded-2xl border border-line bg-bg px-4 py-4 text-lg outline-none focus:border-accent disabled:opacity-60"
         />
       </form>
@@ -261,13 +321,22 @@ export function Catcher() {
       )}
 
       {song && (
-        <div className="mt-4 flex items-center gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`} alt="" className="h-14 w-24 rounded-lg object-cover bg-surface-2 shrink-0" />
-          <p className="min-w-0">
-            <span className="block font-medium truncate">{song.title}</span>
-            {song.artist && <span className="block text-sm text-muted truncate">{song.artist}</span>}
-          </p>
+        <div className="mt-4">
+          <div className="flex items-center gap-3">
+            {song.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={song.image} alt="" className="h-14 w-24 rounded-lg object-cover bg-surface-2 shrink-0" />
+            ) : (
+              <span className="h-14 w-24 rounded-lg bg-surface-2 grid place-items-center shrink-0" aria-hidden>
+                ♪
+              </span>
+            )}
+            <p className="min-w-0">
+              <span className="block font-medium truncate">{song.title}</span>
+              {song.artist && <span className="block text-sm text-muted truncate">{song.artist}</span>}
+            </p>
+          </div>
+          {song.note && <p className="mt-2 text-xs text-muted">{song.note}</p>}
         </div>
       )}
 
@@ -311,22 +380,36 @@ export function Catcher() {
   );
 }
 
-/** Downloads with progress; null if the server couldn't get this video's audio. */
-async function download(url: string, onProgress: (p: number) => void): Promise<Blob | null> {
-  const res = await fetch(url);
-  if (!res.ok || !res.body) return null;
+/** Downloads with progress, plus what /api/media says it found; an error message if the server couldn't get it. */
+async function download(
+  url: string,
+  onProgress: (p: number) => void,
+): Promise<{ blob: Blob; meta: MediaMeta | null } | { error: string; song?: { title: string; artist: string | null; duration: number | null } | null }> {
+  const res = await fetch(url).catch(() => null);
+  if (!res?.ok || !res.body) {
+    const body = await res?.json().catch(() => null);
+    return { error: body?.error ?? "Couldn't get the audio.", song: body?.song };
+  }
   const total = Number(res.headers.get("content-length")) || 0;
+  const header = res.headers.get("x-media");
+  const meta: MediaMeta | null = header ? JSON.parse(decodeURIComponent(header)) : null;
+  // without a length (joined streams), estimate from the duration at ~128 kbps
+  const expect = total || (meta?.duration ? meta.duration * 16_000 : 0);
   const reader = res.body.getReader();
   const parts: Uint8Array<ArrayBuffer>[] = [];
   let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parts.push(value);
-    got += value.length;
-    if (total) onProgress(got / total);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      got += value.length;
+      if (expect) onProgress(Math.min(0.99, got / expect));
+    }
+  } catch {
+    return { error: "The download was interrupted. Try again." };
   }
-  return new Blob(parts, { type: res.headers.get("content-type") ?? "audio/mp4" });
+  return { blob: new Blob(parts, { type: res.headers.get("content-type") ?? "audio/mp4" }), meta };
 }
 
 /** Big "now" chord with the progression heard so far leading into it. */

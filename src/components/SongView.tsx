@@ -25,6 +25,7 @@ export type SongData = {
   source: string;
   source_url: string | null;
   youtube_id: string | null;
+  audio_url?: string | null;
   analysis: Analysis;
 };
 
@@ -74,19 +75,28 @@ export function SongView({ song }: { song: SongData }) {
     return i >= 0 ? a.beats[i] : 0;
   }, [a]);
 
-  // linked songs stream from our server; uploads/recordings play from this device's storage
+  // YouTube songs stream from our server; the rest play from this device's storage, or for links from
+  // other sites are downloaded whole again (joined streams have no length, so they can't seek)
   useEffect(() => {
     if (song.youtube_id) return;
     let url: string | null = null;
-    loadLocalAudio(song.id).then((blob) => {
-      if (!blob) return;
+    let gone = false;
+    (async () => {
+      let blob = await loadLocalAudio(song.id);
+      if (!blob && song.audio_url) {
+        const res = await fetch(`/api/media?url=${encodeURIComponent(song.audio_url)}`).catch(() => null);
+        blob = res?.ok ? await res.blob() : null;
+        if (!blob) setAudioFailed(true);
+      }
+      if (!blob || gone) return;
       url = URL.createObjectURL(blob);
       setLocalUrl(url);
-    });
+    })();
     return () => {
+      gone = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [song.id, song.youtube_id]);
+  }, [song.id, song.youtube_id, song.audio_url]);
   const audioSrc = song.youtube_id ? `/api/audio/${song.youtube_id}` : localUrl;
 
   // the audio element only exists once view prefs have loaded
@@ -167,7 +177,9 @@ export function SongView({ song }: { song: SongData }) {
         <p className="text-xs text-muted mb-4">
           {audioFailed
             ? "The audio couldn't be loaded right now, so ▶ plays along silently with a click on every beat."
-            : `${song.source === "record" ? "Recorded" : "Uploaded"} on another device, so there's no audio here. ▶ plays along with a click on every beat.`}
+            : song.audio_url
+              ? "Loading the audio…"
+              : `${song.source === "record" ? "Recorded" : "Uploaded"} on another device, so there's no audio here. ▶ plays along with a click on every beat.`}
         </p>
       )}
 
