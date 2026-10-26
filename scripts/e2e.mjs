@@ -7,6 +7,8 @@ import { chromium, devices } from "playwright";
 
 const [, , BASE, MIC_WAV, UPLOAD, SHOTS, ONLY] = process.argv;
 const created = [];
+// links already in the library open the saved song; those songs are never deleted afterwards
+const before = new Set((await fetch(`${BASE}/api/songs`).then((r) => r.json())).map((s) => s.id));
 const results = [];
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -56,7 +58,7 @@ async function paste(page, text) {
 async function songId(page) {
   await page.waitForURL(/\/song\//, { timeout: 300000 });
   const id = page.url().split("/song/")[1];
-  created.push(id);
+  if (!before.has(id)) created.push(id);
   return id;
 }
 
@@ -109,12 +111,13 @@ async function linkFlow(page, link, shot) {
   await page.screenshot({ path: `${SHOTS}/${shot}-song.png` });
   if (t < 2) throw new Error(`audio not playing (t=${t})`);
   if (!marks) throw new Error("no beat highlight while playing");
-  return `${secs.toFixed(1)}s paste-to-chords, plays from server (t=${t.toFixed(1)}s), song ${id}`;
+  await page.getByRole("button", { name: "Pause" }).click();
+  return `${secs.toFixed(1)}s paste-to-chords, plays from server (t=${t.toFixed(1)}s), ${await tabNotes(page)}, song ${id}`;
 }
 
 await test("youtube: paste -> server audio -> chords -> plays", async () => {
   const { page, errors } = await newPage();
-  const note = await linkFlow(page, "https://www.youtube.com/watch?v=IXdNnw99-Ic", "yt");
+  const note = await linkFlow(page, "https://www.youtube.com/watch?v=hTWKbfoikeg", "yt");
   if (errors.length) throw new Error("page errors: " + errors.join(" | "));
   return note;
 });
@@ -135,8 +138,17 @@ await test("spotify: paste -> matched YouTube audio -> chords", async () => {
 
 await test("typed link: starts on its own", async () => {
   const { page } = await newPage();
-  await input(page).fill("https://youtu.be/IXdNnw99-Ic");
+  await input(page).fill("https://youtu.be/hTWKbfoikeg");
   return `song ${await songId(page)}`;
+});
+
+await test("library link: opens the saved song without analyzing again", async () => {
+  const { page } = await newPage();
+  const t0 = Date.now();
+  await paste(page, "https://www.youtube.com/watch?v=IXdNnw99-Ic");
+  const id = await songId(page);
+  if (!before.has(id)) throw new Error(`analyzed again as ${id}`);
+  return `${((Date.now() - t0) / 1000).toFixed(1)}s to song ${id}, ${await tabNotes(page)}`;
 });
 
 await test("upload: file analyzed and saved, local playback", async () => {

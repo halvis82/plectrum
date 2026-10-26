@@ -299,12 +299,15 @@ export function SongView({ song }: { song: SongData }) {
       )}
       {pending?.error && <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{pending.error}</p>}
       {view.mode === "tab" && notesComing ? (
-        <div className="mt-6 rounded-2xl border border-line bg-surface p-5">
-          <p className="text-sm">{pending.label}… the chords are ready above, and the tab appears here when every note is in.</p>
-          <div className="mt-3 h-1.5 rounded-full bg-surface-2 overflow-hidden">
-            <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
+        <>
+          <div className="mt-6 rounded-2xl border border-line bg-surface p-5">
+            <p className="text-sm">{pending.label}… the tab replaces the chord sheet below when every note is in.</p>
+            <div className="mt-3 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+              <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
+            </div>
           </div>
-        </div>
+          <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
+        </>
       ) : view.mode === "tab" ? (
         <TabSheet
           a={a}
