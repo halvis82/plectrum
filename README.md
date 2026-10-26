@@ -39,28 +39,34 @@ Songs without audio on the current device (uploaded or recorded elsewhere, or Yo
 
 Besides chords, every song gets a note-by-note tab: string, fret and timing for each note heard.
 
-1. **Notes**: [Basic Pitch](https://github.com/spotify/basic-pitch) (Spotify, ICASSP 2022, Apache-2.0), a 230 KB ONNX model that runs in the same worker. Windowing and note decoding are ported from the Python package and match it note for note (`src/lib/analysis/notes.ts`).
-2. **Strings and frets**: notes that start together form an event. Each event's possible fingerings are scored for stretch, height on the neck and fit to common chord shapes (chords-db), and a Viterbi pass over a 4-fret hand position keeps the hand still and avoids cutting off notes that are still ringing (`src/lib/tab.ts`). Open strings are cost-neutral so rock riffs keep them.
-3. **View**: one box per bar with chord names above, a live playhead, tap to play from a bar. Transpose moves the pitches and frets count from the capo.
+1. **Notes**: the guitar transcription model of Riley, Edwards and Dixon ("High resolution guitar transcription via domain adaptation", ICASSP 2024, MIT, [weights](https://huggingface.co/xavriley/midi-transcription-models), the `guitar-fl` checkpoint), a 24.7M parameter CRNN after Kong et al.'s piano model. It never trained on GuitarSet. Its post-processing is ported to TypeScript and matches the Python package note for note (`src/lib/analysis/guitar.ts`). The weights ship as float16 (49 MB, downloaded once and only when someone catches a song) and run as float32 on WebGPU when the device has it, otherwise on multi-threaded WebAssembly. A 4:17 song takes about 25 s on a Mac with WebGPU and about 90 s on WebAssembly alone.
+2. **Which string**: a small CNN (2 MB, `scripts/strings/`) hears which string each note was played on from a pitch-aligned patch of its first 16 harmonics just after the onset; wound low strings sound darker and less harmonic than plain high strings at the same pitch. It is trained on GuitarSet (acoustic, mic) and EGDB (electric, clean DI plus five amp sounds; labels whose notes don't fit their string are skipped). Feature extraction in the browser matches the Python training code to 1e-7 (`src/lib/analysis/strings.ts`).
+3. **Fingering**: notes that start together form an event. Each event's fingerings are scored for stretch, height on the neck, fit to common chord shapes (chords-db) and the string model's opinion, and a Viterbi pass over a 4-fret hand position keeps the hand still and avoids cutting off notes that are still ringing (`src/lib/tab.ts`).
+4. **Tuning**: standard, half step down, Drop D, whole step down or Drop C. Pitches alone can't tell a song played half a step down from the same song in another key, so Auto only picks a lowered tuning on real evidence: notes below low E that come with their fifth (power chords), and no sign of a bass below them. On 360 GuitarSet recordings and 30 band mixes it never chose a lowered tuning by mistake. When low notes would drop out, the tab offers the lowered tunings in one tap. A lowered tuning also moves the chord shapes, like a negative capo.
+5. **View**: one box per bar with chord names above, a live playhead, tap to play from a bar. Transpose moves the pitches and frets count from the capo.
 
-Notes are stored with the song (`analysis.notes`), so the tab is recomputed instantly when transpose or capo change.
+Notes are stored with the song (`analysis.notes`, with each note's string probabilities), so the tab is recomputed instantly when transpose, capo or tuning change.
 
 ### Tab accuracy (GuitarSet)
 
-Note onset within 50 ms and the right semitone; "string" means the chosen string matches the player's. Costs and thresholds were fitted on players 00-02, players 03-05 are held out. GuitarSet is in Basic Pitch's training data, so note scores there are optimistic.
+Note onset within 50 ms and the right semitone. "String" is the share of correctly found notes on the player's string, and tab F1 counts a note only when its pitch and string are both right. Thresholds and costs were chosen on players 00-02 (with a string model that never saw them); players 03-05 are held out, and the string model scored here never saw them either.
 
-| held-out players | note F1 | string right (of notes found) |
-|---|---|---|
-| comping (chords, arpeggios) | 73.4 | 72.5 |
-| solos (single lines) | 87.3 | 43.4 |
-| comping + bass and vocals at equal loudness | 69.1 | 70.1 |
+| held-out players | note F1 | string right | tab F1 | before (Basic Pitch, fingering rules only): note F1 / string |
+|---|---|---|---|---|
+| comping (chords, arpeggios) | 89.2 | 92.7% | 82.7 | 73.4 / 72.5% |
+| solos (single lines) | 91.4 | 89.7% | 82.0 | 87.3 / 43.4% |
+| comping + bass and vocals at equal loudness | 86.0 | 87.3% | 75.1 | 69.1 / 70.1% |
 
-For solos the same notes can be played in several places on the neck and players differ, so the tab is playable and right in pitch and rhythm but often in a different position than the original. Isolating the guitar first with Demucs (htdemucs_6s) only won back 1.8 points of note F1 in the mixed test, not worth a 136 MB model and minutes per song.
+On electric guitar (EGDB clips 216-241, never trained on) the string model alone is right for 86% of notes on the clean DI and 77% through high-gain amps; trained on GuitarSet only it managed 57 to 61%.
 
 ```bash
-npx tsx scripts/notes-bench.mts <f32 dir> <out dir>                    # transcribe, caches activations
-npx tsx scripts/tab-score.mts <out dir> <jams dir> ['{"notes":{..},"tab":{..}}'] [comp|solo]
-npx tsx scripts/tab-sweep.mts <jams dir> [trials] [min fretted cost]   # fingering cost search
+npx tsx scripts/guitar/bench.mts <f32 dir> <model.onnx> <out dir>      # caches activations (export.py --single)
+NOTES=guitar STRINGS=<strings.onnx> F32=<f32 dir> npx tsx scripts/tab-score.mts <out dir> <jams dir> ['{"notes":{..},"tab":{..}}'] [comp|solo]
+npx tsx scripts/tuning-test.mts <out dir>                               # tuning detection on shifted GuitarSet
+python scripts/strings/build.py <f32 dir> <jams dir> gs.npz 3           # string model data
+python scripts/strings/build_egdb.py <egdb dir> egdb.npz
+python scripts/strings/train.py out.pt 12 gs.npz:012 egdb.npz:egdb [--all] && python scripts/strings/export.py out.pt strings.onnx
+python scripts/guitar/export.py guitar-fl.pth <dir> guitar           # browser model: guitar.onnx + guitar.f16
 ```
 
 ## Chord accuracy
@@ -108,7 +114,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 - Database: Neon Postgres via the Vercel Marketplace. Schema in `scripts/schema.sql`.
-- Model files in `public/model/`: the BTC files are produced by `scripts/export_model.py` from a BTC checkout. `basicpitch.v1.onnx` is `nmp.onnx` from the basic-pitch 0.4.0 wheel.
+- Model files in `public/model/`: the BTC files are produced by `scripts/export_model.py` from a BTC checkout. `guitar.v1.onnx` and `guitar.v1.f16` come from `scripts/guitar/export.py`, `strings.v1.onnx` from `scripts/strings/`. `basicpitch.v1.onnx` (`nmp.onnx` from the basic-pitch 0.4.0 wheel) is no longer used by the app and stays for the before/after benchmark.
 - Chord diagrams come from [@tombatossals/chords-db](https://github.com/tombatossals/chords-db) (MIT) via `scripts/extract-shapes.mjs`.
 
 ## API

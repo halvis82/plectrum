@@ -3,7 +3,8 @@
 import { estimateTempo, onsetEnvelope, trackBeats } from "./beats";
 import { FRAMES_PER_CHUNK, N_BINS, SR, frameTimes, logCqt, type CqtBasis } from "./cqt";
 import { N_CLASSES, beatChords, toSegments, viterbi, type Segment } from "./decode";
-import { decodeNotes, noteActivations, type RunNotes } from "./notes";
+import type { Note } from "./notes";
+import { stringProbs, type RunStrings } from "./strings";
 
 /** Decoding knobs (tuned on GuitarSet, see scripts/guitarset-tune.mts). */
 export type DecodeOptions = {
@@ -47,9 +48,15 @@ export type Analysis = {
   chords: number[];
   /** frame-level smoothed segments [start, end, class] */
   segments: Segment[];
-  /** every transcribed note: [start s, end s, MIDI pitch, strength 0..1]; absent on older songs */
-  notes?: [number, number, number, number][];
+  /** every transcribed note: [start s, end s, MIDI pitch, strength 0..1], then, when the string
+   * model ran, the probability of each string (low E first); absent on older songs */
+  notes?: NoteRow[];
 };
+
+export type NoteRow = [number, number, number, number, ...number[]];
+
+/** Note transcription for the whole signal (22.05 kHz mono). */
+export type Transcribe = (y: Float32Array, onProgress: (p: number) => void) => Promise<Note[]>;
 
 export type Progress = (stage: "features" | "chords" | "beats" | "notes", p: number) => void;
 
@@ -60,16 +67,23 @@ export async function analyze(
   run: RunWindow,
   onProgress?: Progress,
   opts: DecodeOptions = DEFAULT_DECODE,
-  runNotes?: RunNotes,
+  transcribe?: Transcribe,
+  runStrings?: RunStrings,
 ): Promise<Analysis> {
   const frames = await chordFrames(y, basis, meta, run, onProgress, TTA_SHIFTS);
   onProgress?.("beats", 0.5);
   const r = rhythm(y);
   onProgress?.("beats", 1);
   const result = decode(frames, r, y.length / SR, opts);
-  if (runNotes) {
-    const act = await noteActivations(y, runNotes, (p) => onProgress?.("notes", p));
-    result.notes = decodeNotes(act).map((n) => [round(n.start), round(n.end), n.midi, Math.round(n.amp * 100) / 100]);
+  if (transcribe) {
+    const notes = await transcribe(y, (p) => onProgress?.("notes", p));
+    const probs = runStrings ? await stringProbs(y, notes, runStrings) : null;
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    result.notes = notes.map((n, i): NoteRow => {
+      const row: NoteRow = [round(n.start), round(n.end), n.midi, r2(n.amp)];
+      if (probs) for (let s = 0; s < 6; s++) row.push(r2(probs[i * 6 + s]));
+      return row;
+    });
   }
   return result;
 }

@@ -27,7 +27,8 @@ export async function decodeToMono(data: Blob | ArrayBuffer): Promise<Float32Arr
 
 export type Stage = "model" | "features" | "chords" | "beats" | "notes";
 
-/** A long-lived analysis worker. Model loading starts as soon as it is created. */
+/** A long-lived analysis worker. The chord model starts loading as soon as it is created; the much
+ * larger note model only once `prefetch()` says a song is actually on its way. */
 export class Analyzer {
   private worker = new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" });
   private next = 1;
@@ -63,6 +64,10 @@ export class Analyzer {
     const m = await this.call({ type: "live", samples }, () => {});
     if (m.type !== "live") throw new Error("Unexpected worker reply");
     return { frames: m.frames, hop: m.hop };
+  }
+
+  prefetch() {
+    void this.call({ type: "prefetch" }, () => {}).catch(() => {});
   }
 
   terminate() {

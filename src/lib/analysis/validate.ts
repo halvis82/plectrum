@@ -11,6 +11,6 @@ export function validAnalysis(a: unknown): a is Analysis {
     x.chords.every((c) => Number.isInteger(c) && c >= 0 && c < 170) &&
     (x.meter === 3 || x.meter === 4) && Number.isInteger(x.downbeat) &&
     Array.isArray(x.segments) && x.segments.length <= 20000 && x.segments.every((s) => nums(s, 3)) &&
-    (x.notes === undefined || (Array.isArray(x.notes) && x.notes.length <= 40000 && x.notes.every((n) => nums(n, 4) && n.length === 4)))
+    (x.notes === undefined || (Array.isArray(x.notes) && x.notes.length <= 40000 && x.notes.every((n) => nums(n, 10) && (n.length === 4 || n.length === 10))))
   );
 }

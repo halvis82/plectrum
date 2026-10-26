@@ -17,6 +17,7 @@ import {
 } from "@/lib/sheet";
 import { ChordDiagram } from "./ChordDiagram";
 import { TabSheet } from "./TabSheet";
+import { TUNINGS, detectTuning, type TuningId } from "@/lib/tab";
 
 export type SongData = {
   id: string;
@@ -34,7 +35,10 @@ type Clock = { now: () => number; seek: (t: number) => void; play: () => void; p
 function usePrefs(id: string) {
   const storageKey = `cc:view:${id}`;
   // capo null = auto: follow the easiest capo for the current transposition
-  const [view, setView] = useState<(Omit<View, "capo"> & { capo: number | null; mode: "tab" | "bars" | "lyrics"; follow: boolean; lyricOffset: number }) | null>(null);
+  // tuning null = auto (detected from the notes)
+  const [view, setView] = useState<
+    (Omit<View, "capo"> & { capo: number | null; tuning?: TuningId | null; mode: "tab" | "bars" | "lyrics"; follow: boolean; lyricOffset: number }) | null
+  >(null);
   const update = useCallback(
     (patch: Partial<NonNullable<typeof view>>) =>
       setView((v) => {
@@ -140,13 +144,21 @@ export function SongView({ song }: { song: SongData }) {
       .catch(() => setLyrics(null));
   }, [song.title, song.artist, a.duration]);
 
-  const transposeBy = view?.transpose ?? 0;
+  const detected = useMemo(
+    () => (a.notes ? detectTuning(a.notes.map(([start, end, midi, amp, ...strings]) => ({ start, end, midi, amp, strings: strings.length === 6 ? strings : undefined }))) : "standard"),
+    [a.notes],
+  );
+  const tuning = TUNINGS.find((t) => t.id === (view?.tuning ?? detected)) ?? TUNINGS[0];
+  // notes too low for the current tuning would drop out of the tab
+  const tooLow = useMemo(() => a.notes?.filter(([, , midi]) => midi < tuning.strings[0] && midi >= 36).length ?? 0, [a.notes, tuning]);
+  // a lowered tuning works like a negative capo: shapes sit above the sounding chords
+  const transposeBy = (view?.transpose ?? 0) - tuning.shift;
   const bestCapo = useMemo(
     () => capoOptions(stats.items.map((i) => ({ chord: transpose(i.chord, transposeBy), dur: i.dur })))[0].capo,
     [stats, transposeBy],
   );
   const capo = view?.capo ?? bestCapo;
-  const shape = useMemo(() => (view ? makeShapeFn(a, { ...view, capo }, stats.key) : null), [a, view, capo, stats.key]);
+  const shape = useMemo(() => (view ? makeShapeFn(a, { ...view, capo: capo + tuning.shift }, stats.key) : null), [a, view, capo, tuning.shift, stats.key]);
   const names = useCallback((c: number) => shape!(c).name, [shape]);
 
   if (!view || !shape) return <div className="h-96" />;
@@ -210,6 +222,21 @@ export function SongView({ song }: { song: SongData }) {
             ))}
           </select>
         </label>
+        <label className="flex items-center gap-1.5">
+          <span className="text-muted">Tuning</span>
+          <select
+            value={view.tuning ?? "auto"}
+            onChange={(e) => update({ tuning: e.target.value === "auto" ? null : (e.target.value as TuningId) })}
+            className="rounded-lg border border-line bg-surface px-2 py-1.5"
+          >
+            <option value="auto">Auto ({TUNINGS.find((t) => t.id === detected)!.name})</option>
+            {TUNINGS.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <Segmented<Simplify>
           value={view.simplify}
           onChange={(v) => update({ simplify: v })}
@@ -232,9 +259,10 @@ export function SongView({ song }: { song: SongData }) {
 
       <p className="mt-3 text-sm text-muted">
         Key <b className="text-fg">{keyName(sounding)}</b> · {Math.round(a.bpm)} BPM · {a.meter}/4
+        {tuning.id !== "standard" && <> · {tuning.name}</>}
         {capo > 0 && (
           <>
-            {" "}· Capo {capo}, shapes in <b className="text-fg">{keyName({ ...sounding, tonic: (sounding.tonic - capo + 12) % 12 }).split(" ")[0]}{sounding.mode === "minor" ? "m" : ""}</b>
+            {" "}· Capo {capo}, shapes in <b className="text-fg">{keyName({ ...sounding, tonic: (sounding.tonic - capo - tuning.shift + 24) % 12 }).split(" ")[0]}{sounding.mode === "minor" ? "m" : ""}</b>
           </>
         )}
         {view.capo !== null && view.capo !== bestCapo && (
@@ -253,6 +281,16 @@ export function SongView({ song }: { song: SongData }) {
         ))}
       </div>
 
+      {view.mode === "tab" && tooLow >= 6 && (
+        <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">
+          {tooLow} notes are lower than {tuning.name.toLowerCase()} tuning reaches, so they&apos;re left out. If the guitar is tuned down, pick its tuning:{" "}
+          {TUNINGS.filter((t) => t.strings[0] < tuning.strings[0]).map((t) => (
+            <button key={t.id} onClick={() => update({ tuning: t.id })} className="underline mr-2">
+              {t.name}
+            </button>
+          ))}
+        </p>
+      )}
       {view.mode === "tab" ? (
         <TabSheet
           a={a}
@@ -260,6 +298,7 @@ export function SongView({ song }: { song: SongData }) {
           names={names}
           transpose={view.transpose}
           capo={capo}
+          tuning={tuning.strings}
           now={clock?.now ?? null}
           follow={view.follow && playing}
           onSeek={

@@ -28,7 +28,7 @@ type Phase =
   | { kind: "working"; label: string; p?: number };
 
 const STAGE_LABEL: Record<Stage, string> = {
-  model: "Loading the chord model",
+  model: "Loading the models (first time only)",
   features: "Listening to the harmony",
   chords: "Recognizing chords",
   beats: "Finding the beat",
@@ -60,7 +60,12 @@ export function Catcher() {
   const busy = phase.kind !== "idle";
 
   /** The 13 MB model starts loading in the background and is cached afterwards. */
-  const getAnalyzer = () => (analyzer.current ??= new Analyzer());
+  const getAnalyzer = () => {
+    analyzer.current ??= new Analyzer();
+    // someone is about to catch a song: start the large note model download
+    analyzer.current.prefetch();
+    return analyzer.current;
+  };
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500));
     idle(() => (analyzer.current ??= new Analyzer()));

@@ -92,10 +92,32 @@ def bandcamp(url):
     }
 
 
-def extract(url):
+def youtube_cookies():
+    """A signed-in session (Netscape cookies.txt, base64 in YT_COOKIES_B64) gets past YouTube's bot
+    wall on cloud IPs. yt-dlp rewrites the file as cookies refresh, so it lives in /tmp."""
+    b64 = os.environ.get("YT_COOKIES_B64")
+    if not b64:
+        return None
+    path = "/tmp/yt-cookies.txt"
+    if not os.path.exists(path):
+        import base64
+
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(b64))
+    return path
+
+
+def extract(url, client=None):
     if re.match(r"https?://[^/]*bandcamp\.com/", url):
         return bandcamp(url)
-    with yt_dlp.YoutubeDL(BASE) as y:
+    opts = dict(BASE)
+    if "youtube.com/" in url or "youtu.be/" in url:
+        cookies = youtube_cookies()
+        if cookies:
+            opts["cookiefile"] = cookies
+    if client:
+        opts["extractor_args"] = {"youtube": {"player_client": client.split(",")}}
+    with yt_dlp.YoutubeDL(opts) as y:
         info = y.extract_info(url, download=False)
     if info.get("entries"):
         info = next((e for e in info["entries"] if e), None)
@@ -189,8 +211,10 @@ class handler(BaseHTTPRequestHandler):
             if q.get("q"):
                 d = float(q["duration"]) if q.get("duration") else None
                 out = search(q["q"], q.get("title", ""), q.get("artist", ""), d)
+            elif q.get("url") and q.get("stream"):
+                return self.stream(extract(q["url"], q.get("client")))
             elif q.get("url"):
-                out = extract(q["url"])
+                out = extract(q["url"], q.get("client"))
             else:
                 return self.reply(400, {"error": "url or q required"})
             self.reply(200, out)
@@ -206,6 +230,30 @@ class handler(BaseHTTPRequestHandler):
                 return self.reply(422, {"error": "That page doesn't have audio ChordCatch can fetch. Try a link to the song itself."})
             msg = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([\w-]+:\s*)?", "", str(e)).split(". Use --")[0].split("\n")[0]
             self.reply(422, {"error": msg[:300]})
+
+    def stream(self, info):
+        """Downloads the audio from this same machine (YouTube ties stream URLs to the requesting IP)
+        and passes it on in chunks."""
+        from urllib.request import Request, urlopen
+
+        f = info["format"]
+        if not f["protocol"].startswith("http"):
+            return self.reply(422, {"error": "not a plain stream"})
+        meta = {k: info[k] for k in ("title", "artist", "duration", "site", "page", "thumbnail")}
+        first = urlopen(Request(f["url"], headers={**f["headers"], "range": "bytes=0-0"}), timeout=20)
+        total = int(first.headers.get("content-range", "/0").split("/")[1] or 0)
+        self.send_response(200)
+        self.send_header("content-type", {"m4a": "audio/mp4", "webm": "audio/webm", "mp3": "audio/mpeg"}.get(f["ext"], "application/octet-stream"))
+        if total:
+            self.send_header("content-length", str(total))
+        self.send_header("x-media", __import__("urllib.parse").parse.quote(json.dumps(meta)))
+        self.end_headers()
+        pos, chunk = 0, 2 * 1024 * 1024
+        while pos < total:
+            end = min(total - 1, pos + chunk - 1)
+            data = urlopen(Request(f["url"], headers={**f["headers"], "range": f"bytes={pos}-{end}"}), timeout=30).read()
+            self.wfile.write(data)
+            pos = end + 1
 
     def reply(self, status, body):
         data = json.dumps(body).encode()

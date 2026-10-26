@@ -9,7 +9,23 @@ import shapes from "./chord-shapes.json";
 export const STANDARD = [40, 45, 50, 55, 59, 64];
 export const STRING_NAMES = ["E", "A", "D", "G", "B", "e"];
 
-export type TabNote = Note & { string: number; fret: number };
+/** Common tunings, low string first. `shift` is how far chord shapes sit from the sounding chords. */
+export const TUNINGS = [
+  { id: "standard", name: "Standard", strings: STANDARD, shift: 0 },
+  { id: "half-down", name: "Half step down", strings: STANDARD.map((m) => m - 1), shift: -1 },
+  { id: "drop-d", name: "Drop D", strings: [38, 45, 50, 55, 59, 64], shift: 0 },
+  { id: "whole-down", name: "Whole step down", strings: STANDARD.map((m) => m - 2), shift: -2 },
+  { id: "drop-c", name: "Drop C", strings: [36, 43, 48, 53, 57, 62], shift: -2 },
+] as const;
+export type TuningId = (typeof TUNINGS)[number]["id"];
+
+const NOTE_NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+/** Letter for each string, low first; the top string is lowercase as tab convention has it. */
+export const stringNames = (tuning: readonly number[]) => tuning.map((m, i) => (i === tuning.length - 1 ? NOTE_NAMES[m % 12].toLowerCase() : NOTE_NAMES[m % 12]));
+
+/** `strings`: the string model's probability for each string (low E first), when it ran */
+export type TabInput = Note & { strings?: ArrayLike<number> };
+export type TabNote = TabInput & { string: number; fret: number };
 
 export type TabOptions = {
   maxFret: number;
@@ -34,11 +50,14 @@ export type TabOptions = {
   /** bonus when an event's frets fit a common chord shape, and when they do together with the notes still ringing */
   shape: number;
   shapeLink: number;
+  /** weight of the string model's opinion: cost -audio * log p(string) per note */
+  audio: number;
   /** candidate fingerings kept per event */
   beam: number;
 };
 
-/** Fitted on GuitarSet players 00-02 with open strings kept cost-neutral (scripts/tab-sweep.mts). */
+/** Fitted on GuitarSet players 00-02 with open strings kept cost-neutral (scripts/tab-sweep.mts); `audio`
+ * chosen on the same players with a string model that never saw them. */
 export const DEFAULT_TAB: TabOptions = {
   maxFret: 20,
   chordWindow: 0.05,
@@ -53,6 +72,7 @@ export const DEFAULT_TAB: TabOptions = {
   fretted: 0.016,
   shape: 0.231,
   shapeLink: 3,
+  audio: 0.7,
   beam: 64,
 };
 
@@ -88,7 +108,8 @@ const inShape = (strings: number[], frets: number[]) => {
 /** lo/hi: lowest and highest fretted fret (null when every string is open) */
 type Fingering = { strings: number[]; frets: number[]; lo: number | null; hi: number | null; cost: number };
 
-function fingerings(midis: number[], tuning: number[], o: TabOptions): Fingering[] {
+function fingerings(notes: TabInput[], tuning: readonly number[], o: TabOptions): Fingering[] {
+  const midis = notes.map((n) => n.midi);
   const out: Fingering[] = [];
   const strings: number[] = [];
   const frets: number[] = [];
@@ -106,7 +127,8 @@ function fingerings(midis: number[], tuning: number[], o: TabOptions): Fingering
         o.height * (center ?? 0) +
         o.high * fretted.reduce((a, f) => a + Math.max(0, f - 12), 0) +
         o.fretted * fretted.length -
-        (inShape(strings, frets) ? o.shape : 0);
+        (inShape(strings, frets) ? o.shape : 0) -
+        o.audio * strings.reduce((a, st, i) => a + (notes[i].strings ? Math.log(Math.max(1e-3, notes[i].strings![st])) : 0), 0);
       out.push({ strings: [...strings], frets: [...frets], lo: fretted.length ? lo : null, hi: fretted.length ? hi : null, cost });
       return;
     }
@@ -129,8 +151,8 @@ function fingerings(midis: number[], tuning: number[], o: TabOptions): Fingering
 }
 
 /** Groups notes into events (chords / single notes) that are fingered together. */
-function events(notes: Note[], window: number): Note[][] {
-  const out: Note[][] = [];
+function events(notes: TabInput[], window: number): TabInput[][] {
+  const out: TabInput[][] = [];
   for (const n of notes) {
     const last = out[out.length - 1];
     if (last && n.start - last[0].start <= window && !last.some((m) => m.midi === n.midi)) last.push(n);
@@ -139,22 +161,63 @@ function events(notes: Note[], window: number): Note[][] {
   return out;
 }
 
-export function toTab(notes: Note[], tuning: number[] = STANDARD, o: TabOptions = DEFAULT_TAB): TabNote[] {
+export function toTab(notes: TabInput[], tuning: readonly number[] = STANDARD, o: TabOptions = DEFAULT_TAB): TabNote[] {
+  return scoredTab(notes, tuning, o).tab;
+}
+
+/**
+ * The tuning a recording needs. Pitches alone can't tell a song played half a step down from the same
+ * song in another key, so only notes below standard tuning's low E count as evidence: when enough of
+ * them are heard, the cheapest of the lowered tunings that can play them wins. Otherwise standard.
+ */
+export function detectTuning(notes: TabInput[], o: TabOptions = DEFAULT_TAB): TuningId {
+  const strength = notes.reduce((a, n) => a + n.amp, 0) || 1;
+  const low = notes.filter((n) => n.midi < STANDARD[0] && n.midi >= 36);
+  const lowStrength = low.reduce((a, n) => a + n.amp, 0);
+  if (low.length < LOW_NOTES_MIN || lowStrength / strength < LOW_SHARE_MIN) return "standard";
+  // notes below any guitar tuning mean a bass is playing, and its notes explain the low ones too
+  const bass = notes.filter((n) => n.midi < 36).reduce((a, n) => a + n.amp, 0);
+  if (bass > BASS_SHARE_MAX * lowStrength) return "standard";
+  // a guitar's low notes come inside chords: the fifth above starts with them (power chords); a bass
+  // note usually stands alone
+  const withFifth = low.filter((l) => notes.some((n) => n.midi === l.midi + 7 && Math.abs(n.start - l.start) < 0.05)).length;
+  if (withFifth < FIFTH_SHARE_MIN * low.length) return "standard";
+  let best: TuningId = "standard";
+  let bestCost = Infinity;
+  for (const t of TUNINGS) {
+    if (t.strings[0] > Math.min(...low.map((n) => n.midi))) continue;
+    const { cost, kept } = scoredTab(notes, t.strings, o);
+    const c = cost / Math.max(1, kept);
+    if (c < bestCost) {
+      bestCost = c;
+      best = t.id;
+    }
+  }
+  return best;
+}
+
+/** Evidence needed for a lowered tuning: at least this many notes below low E, carrying this share of the strength. */
+const LOW_NOTES_MIN = 6;
+const LOW_SHARE_MIN = 0.01;
+const BASS_SHARE_MAX = 0.25;
+const FIFTH_SHARE_MIN = 0.3;
+
+function scoredTab(notes: TabInput[], tuning: readonly number[], o: TabOptions): { tab: TabNote[]; cost: number; kept: number } {
   const lowest = tuning[0];
   const highest = tuning[tuning.length - 1] + o.maxFret;
   const playable = notes.filter((n) => n.midi >= lowest && n.midi <= highest).sort((a, b) => a.start - b.start);
-  const evs: { notes: Note[]; options: Fingering[] }[] = [];
+  const evs: { notes: TabInput[]; options: Fingering[] }[] = [];
   for (let ev of events(playable, o.chordWindow)) {
     // more notes than strings, or no way to finger them all: drop the quietest until it fits
     ev = [...ev].sort((a, b) => b.amp - a.amp).slice(0, tuning.length);
-    let options = fingerings(ev.map((n) => n.midi), tuning, o);
+    let options = fingerings(ev, tuning, o);
     while (!options.length && ev.length > 1) {
       ev = ev.slice(0, -1);
-      options = fingerings(ev.map((n) => n.midi), tuning, o);
+      options = fingerings(ev, tuning, o);
     }
     if (options.length) evs.push({ notes: ev, options });
   }
-  if (!evs.length) return [];
+  if (!evs.length) return { tab: [], cost: 0, kept: 0 };
 
   // Viterbi over events
   let score = evs[0].options.map((f) => f.cost);
@@ -205,12 +268,13 @@ export function toTab(notes: Note[], tuning: number[] = STANDARD, o: TabOptions 
     hand = nextHand;
     back.push(bp);
   }
-  let j = score.indexOf(Math.min(...score));
+  const cost = Math.min(...score);
+  let j = score.indexOf(cost);
   const out: TabNote[] = [];
   for (let e = evs.length - 1; e >= 0; e--) {
     const f = evs[e].options[j];
     evs[e].notes.forEach((n, k) => out.push({ ...n, string: f.strings[k], fret: f.frets[k] }));
     if (e > 0) j = back[e - 1][j];
   }
-  return out.sort((a, b) => a.start - b.start || a.string - b.string);
+  return { tab: out.sort((a, b) => a.start - b.start || a.string - b.string), cost, kept: out.length };
 }

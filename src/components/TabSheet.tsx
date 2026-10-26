@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
 import type { buildBars } from "@/lib/sheet";
-import { STANDARD, STRING_NAMES, toTab, type TabNote } from "@/lib/tab";
+import { stringNames, toTab, type TabNote } from "@/lib/tab";
 
 const LINE = 15; // px between strings
 
@@ -17,6 +17,7 @@ export function TabSheet({
   names,
   transpose,
   capo,
+  tuning: openStrings,
   now,
   follow,
   onSeek,
@@ -26,18 +27,21 @@ export function TabSheet({
   names: (cls: number) => string;
   transpose: number;
   capo: number;
+  /** open-string pitches, low first */
+  tuning: readonly number[];
   now: (() => number) | null;
   follow: boolean;
   onSeek?: (t: number) => void;
 }) {
   const tab = useMemo(() => {
     if (!a.notes) return [];
-    const tuning = STANDARD.map((m) => m + capo);
+    const tuning = openStrings.map((m) => m + capo);
     return toTab(
-      a.notes.map(([start, end, midi, amp]) => ({ start, end, midi: midi + transpose, amp })),
+      a.notes.map(([start, end, midi, amp, ...strings]) => ({ start, end, midi: midi + transpose, amp, strings: strings.length === 6 ? strings : undefined })),
       tuning,
     );
-  }, [a.notes, transpose, capo]);
+  }, [a.notes, transpose, capo, openStrings]);
+  const names6 = stringNames(openStrings);
 
   // bar time spans and the notes that start inside each
   const spans = useMemo(() => {
@@ -115,8 +119,8 @@ export function TabSheet({
               </div>
               <div className="flex gap-2">
                 <div className="w-6 font-mono text-[10px] text-muted leading-none select-none" aria-hidden>
-                  {[...STRING_NAMES].reverse().map((n) => (
-                    <div key={n} style={{ height: LINE }} className="flex items-center">
+                  {[...names6].reverse().map((n, k) => (
+                    <div key={k} style={{ height: LINE }} className="flex items-center">
                       {n}
                     </div>
                   ))}
@@ -129,9 +133,9 @@ export function TabSheet({
                   className={`relative flex-1 ${onSeek ? "cursor-pointer" : ""}`}
                   style={{ height: LINE * 6 }}
                   role="img"
-                  aria-label={`Bar ${s.bar.index}: ${s.notes.map((n) => `${STRING_NAMES[n.string]} string fret ${n.fret}`).join(", ") || "rest"}`}
+                  aria-label={`Bar ${s.bar.index}: ${s.notes.map((n) => `${names6[n.string]} string fret ${n.fret}`).join(", ") || "rest"}`}
                 >
-                  {STANDARD.map((_, k) => (
+                  {openStrings.map((_, k) => (
                     <div key={k} className="absolute inset-x-0 h-px bg-line" style={{ top: LINE * k + LINE / 2 }} />
                   ))}
                   {s.notes.map((n, k) => (
