@@ -153,9 +153,10 @@ export function SongView({ song }: { song: SongData }) {
   const tooLow = useMemo(() => a.notes?.filter(([, , midi]) => midi < tuning.strings[0] && midi >= 36).length ?? 0, [a.notes, tuning]);
   // a lowered tuning works like a negative capo: shapes sit above the sounding chords
   const transposeBy = (view?.transpose ?? 0) - tuning.shift;
+  // nobody tunes down and then capos back up, so a lowered tuning plays without one
   const bestCapo = useMemo(
-    () => capoOptions(stats.items.map((i) => ({ chord: transpose(i.chord, transposeBy), dur: i.dur })))[0].capo,
-    [stats, transposeBy],
+    () => (tuning.shift < 0 ? 0 : capoOptions(stats.items.map((i) => ({ chord: transpose(i.chord, transposeBy), dur: i.dur })))[0].capo),
+    [stats, transposeBy, tuning.shift],
   );
   const capo = view?.capo ?? bestCapo;
   const shape = useMemo(() => (view ? makeShapeFn(a, { ...view, capo: capo + tuning.shift }, stats.key) : null), [a, view, capo, tuning.shift, stats.key]);
@@ -281,7 +282,7 @@ export function SongView({ song }: { song: SongData }) {
         ))}
       </div>
 
-      {view.mode === "tab" && tooLow >= 6 && (
+      {view.mode === "tab" && tooLow >= Math.max(12, 0.02 * (a.notes?.length ?? 0)) && (
         <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">
           {tooLow} notes are lower than {tuning.name.toLowerCase()} tuning reaches, so they&apos;re left out. If the guitar is tuned down, pick its tuning:{" "}
           {TUNINGS.filter((t) => t.strings[0] < tuning.strings[0]).map((t) => (
