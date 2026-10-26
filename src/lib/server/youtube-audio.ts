@@ -185,8 +185,10 @@ async function fromInvidious(videoId: string, problems: string[]): Promise<Audio
         problems.push(`invidious ${host}: no audio`);
         continue;
       }
-      // the proxy redirects to a media host; keep the final URL so ranged reads skip the redirect
-      const probe = await fetch(new URL(f.url, `https://${host}`), { headers: { range: "bytes=0-1023" }, signal: AbortSignal.timeout(15_000) });
+      // the proxy redirects to a media host; keep the final URL so ranged reads skip the redirect.
+      // Read from the middle: a media host YouTube has blocked still serves the start from its cache
+      const mid = Math.floor((Number(f.clen) || 0) / 2);
+      const probe = await fetch(new URL(f.url, `https://${host}`), { headers: { range: `bytes=${mid}-${mid + 1023}` }, signal: AbortSignal.timeout(15_000) });
       await probe.arrayBuffer().catch(() => {});
       if (!probe.ok) {
         problems.push(`invidious ${host}: stream HTTP ${probe.status}`);
