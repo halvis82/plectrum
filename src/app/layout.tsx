@@ -31,7 +31,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </header>
         <main className="mx-auto w-full max-w-5xl px-4 pb-16 flex-1">{children}</main>
         <footer className="mx-auto w-full max-w-5xl px-4 py-6 text-xs text-muted">
-          Chords are recognized from the audio itself, in your browser, with the open BTC model (ISMIR 2019). Lyrics from LRCLIB.
+          Chords and notes are recognized from the audio itself, in your browser, with the open BTC (ISMIR 2019) and Basic Pitch (Spotify) models. Lyrics from LRCLIB.
         </footer>
       </body>
     </html>

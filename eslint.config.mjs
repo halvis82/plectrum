@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // vendored yt-dlp challenge solver (generated code)
+    "src/lib/server/ejs/**",
   ]),
 ]);
 

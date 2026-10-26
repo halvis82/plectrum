@@ -12,7 +12,7 @@ export type WorkerRequest =
   | { id: number; type: "live"; samples: Float32Array };
 
 export type WorkerMessage =
-  | { id: number; type: "progress"; stage: "model" | "features" | "chords" | "beats"; p: number }
+  | { id: number; type: "progress"; stage: "model" | "features" | "chords" | "beats" | "notes"; p: number }
   | { id: number; type: "done"; result: Analysis }
   | { id: number; type: "live"; frames: Int32Array; hop: number }
   | { id: number; type: "loaded" }
@@ -21,17 +21,19 @@ export type WorkerMessage =
 ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ort.env.versions.web}/dist/`;
 ort.env.wasm.numThreads = 1;
 
-let loaded: Promise<{ session: ort.InferenceSession; basis: CqtBasis; meta: ModelMeta }> | null = null;
+let loaded: Promise<{ session: ort.InferenceSession; notes: ort.InferenceSession; basis: CqtBasis; meta: ModelMeta }> | null = null;
 
 function load() {
   loaded ??= (async () => {
-    const [model, basisBuf, meta] = await Promise.all([
+    const [model, notesModel, basisBuf, meta] = await Promise.all([
       fetch("/model/btc170.v1.onnx").then((r) => r.arrayBuffer()),
+      fetch("/model/basicpitch.v1.onnx").then((r) => r.arrayBuffer()),
       fetch("/model/cqt_basis.v1.bin").then((r) => r.arrayBuffer()),
       fetch("/model/btc170.v1.json").then((r) => r.json() as Promise<ModelMeta>),
     ]);
     const session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"] });
-    return { session, basis: parseBasis(basisBuf), meta };
+    const notes = await ort.InferenceSession.create(notesModel, { executionProviders: ["wasm"] });
+    return { session, notes, basis: parseBasis(basisBuf), meta };
   })();
   loaded.catch(() => (loaded = null));
   return loaded;
@@ -54,7 +56,7 @@ async function handle(req: WorkerRequest) {
       return post({ id: req.id, type: "loaded" });
     }
     post({ id: req.id, type: "progress", stage: "model", p: 0 });
-    const { session, basis, meta } = await load();
+    const { session, notes, basis, meta } = await load();
     const run = async (x: Float32Array) => {
       const out = await session.run({ x: new ort.Tensor("float32", x, [1, FRAMES_PER_CHUNK, N_BINS]) });
       return out.logp.data as Float32Array;
@@ -68,7 +70,11 @@ async function handle(req: WorkerRequest) {
       return post({ id: req.id, type: "live", frames: viterbi(logp, n, N_CLASSES, 4), hop: HOP / SR });
     }
     post({ id: req.id, type: "progress", stage: "model", p: 1 });
-    const result = await analyze(req.samples, basis, meta, run, (stage, p) => post({ id: req.id, type: "progress", stage, p }));
+    const runNotes = async (x: Float32Array) => {
+      const out = await notes.run({ "serving_default_input_2:0": new ort.Tensor("float32", x, [1, x.length, 1]) });
+      return { note: out["StatefulPartitionedCall:1"].data as Float32Array, onset: out["StatefulPartitionedCall:2"].data as Float32Array };
+    };
+    const result = await analyze(req.samples, basis, meta, run, (stage, p) => post({ id: req.id, type: "progress", stage, p }), undefined, runNotes);
     post({ id: req.id, type: "done", result });
   } catch (err) {
     post({ id: req.id, type: "error", message: err instanceof Error ? err.message : String(err) });

@@ -11,8 +11,12 @@ export function buildBars(a: Analysis): Bar[] {
   const range = (from: number, to: number) => Array.from({ length: Math.max(0, to - from) }, (_, k) => from + k);
   if (a.downbeat > 0) bars.push({ index: 0, beats: range(0, a.downbeat), pickup: true });
   for (let i = a.downbeat; i < n; i += a.meter) bars.push({ index: bars.length, beats: range(i, Math.min(n, i + a.meter)), pickup: false });
-  // drop empty no-chord bars at the very start and end
-  const isEmpty = (b: Bar) => b.beats.every((i) => parseLabel(labelFromIndex(a.chords[i])) === null);
+  // drop bars at the very start and end with no chord and no notes
+  const span = (b: Bar) => [a.beats[b.beats[0]], a.beats[b.beats.at(-1)! + 1] ?? a.duration];
+  const isEmpty = (b: Bar) => {
+    const [from, to] = span(b);
+    return b.beats.every((i) => parseLabel(labelFromIndex(a.chords[i])) === null) && !a.notes?.some(([t]) => t >= from && t < to);
+  };
   while (bars.length && isEmpty(bars[0])) bars.shift();
   while (bars.length && isEmpty(bars[bars.length - 1])) bars.pop();
   // number full bars from 1 after trimming (a leading pickup keeps index 0)

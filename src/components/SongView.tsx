@@ -15,8 +15,8 @@ import {
   type LyricLine,
   type View,
 } from "@/lib/sheet";
-import { YT_STATE, createPlayer, type YTPlayer } from "@/lib/youtube";
 import { ChordDiagram } from "./ChordDiagram";
+import { TabSheet } from "./TabSheet";
 
 export type SongData = {
   id: string;
@@ -33,7 +33,7 @@ type Clock = { now: () => number; seek: (t: number) => void; play: () => void; p
 function usePrefs(id: string) {
   const storageKey = `cc:view:${id}`;
   // capo null = auto: follow the easiest capo for the current transposition
-  const [view, setView] = useState<(Omit<View, "capo"> & { capo: number | null; mode: "bars" | "lyrics"; follow: boolean; lyricOffset: number }) | null>(null);
+  const [view, setView] = useState<(Omit<View, "capo"> & { capo: number | null; mode: "tab" | "bars" | "lyrics"; follow: boolean; lyricOffset: number }) | null>(null);
   const update = useCallback(
     (patch: Partial<NonNullable<typeof view>>) =>
       setView((v) => {
@@ -59,47 +59,22 @@ export function SongView({ song }: { song: SongData }) {
     try {
       saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
     } catch {}
-    setView(saved ?? { transpose: 0, capo: null, simplify: "full", mode: "bars", follow: true, lyricOffset: 0 });
-  }, [storageKey, setView]);
+    setView(saved ?? { transpose: 0, capo: null, simplify: "full", mode: a.notes ? "tab" : "bars", follow: true, lyricOffset: 0 });
+  }, [storageKey, setView, a.notes]);
 
   // ---- playback ----
   const [mediaClock, setClock] = useState<Clock | null>(null);
   const [playing, setPlaying] = useState(false);
   const [beat, setBeat] = useState(-1);
   const [localUrl, setLocalUrl] = useState<string | null>(null);
-  const [ytFailed, setYtFailed] = useState(false);
-  const ytEl = useRef<HTMLDivElement>(null);
+  const [audioFailed, setAudioFailed] = useState(false);
   const audioEl = useRef<HTMLAudioElement>(null);
   const firstChord = useMemo(() => {
     const i = a.chords.findIndex((c) => c < 168);
     return i >= 0 ? a.beats[i] : 0;
   }, [a]);
 
-  // the player's container only exists once view prefs have loaded
-  const mounted = view !== null;
-  useEffect(() => {
-    if (!song.youtube_id || !ytEl.current) return;
-    let p: YTPlayer | null = null;
-    let cancelled = false;
-    createPlayer(
-      ytEl.current,
-      song.youtube_id,
-      (s) => setPlaying(s === YT_STATE.PLAYING),
-      () => setYtFailed(true),
-    ).then(
-      (pl) => {
-        if (cancelled) return pl.destroy();
-        p = pl;
-        setClock({ now: () => pl.getCurrentTime(), seek: (t) => pl.seekTo(t), play: () => pl.playVideo(), pause: () => pl.pauseVideo() });
-      },
-      () => !cancelled && setYtFailed(true),
-    );
-    return () => {
-      cancelled = true;
-      p?.destroy();
-    };
-  }, [song.youtube_id, mounted]);
-
+  // linked songs stream from our server; uploads/recordings play from this device's storage
   useEffect(() => {
     if (song.youtube_id) return;
     let url: string | null = null;
@@ -112,15 +87,18 @@ export function SongView({ song }: { song: SongData }) {
       if (url) URL.revokeObjectURL(url);
     };
   }, [song.id, song.youtube_id]);
+  const audioSrc = song.youtube_id ? `/api/audio/${song.youtube_id}` : localUrl;
 
+  // the audio element only exists once view prefs have loaded
+  const mounted = view !== null;
   useEffect(() => {
     const el = audioEl.current;
-    if (!localUrl || !el) return;
-    setClock({ now: () => el.currentTime, seek: (t) => (el.currentTime = t), play: () => void el.play(), pause: () => el.pause() });
-  }, [localUrl, mounted]);
+    if (!audioSrc || !el) return;
+    setClock({ now: () => el.currentTime, seek: (t) => (el.currentTime = t), play: () => void el.play().catch(() => setAudioFailed(true)), pause: () => el.pause() });
+  }, [audioSrc, mounted]);
 
   // no audio here (uploaded elsewhere, or YouTube unreachable): a silent play-along clock with a click
-  const noAudio = (!song.youtube_id && !localUrl) || ytFailed;
+  const noAudio = !audioSrc || audioFailed;
   const fallbackClock = useMemo(() => (noAudio ? playAlongClock(a, setPlaying) : null), [noAudio, a]);
   const clock = fallbackClock ?? mediaClock;
 
@@ -174,15 +152,22 @@ export function SongView({ song }: { song: SongData }) {
   return (
     <div>
       {/* player */}
-      {song.youtube_id && !ytFailed ? (
-        <div ref={ytEl} className="aspect-video w-full max-w-xl rounded-2xl overflow-hidden bg-black mb-4" />
-      ) : localUrl ? (
-        <audio ref={audioEl} src={localUrl} controls className="w-full mb-4" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
+      {audioSrc && !audioFailed ? (
+        <audio
+          ref={audioEl}
+          src={audioSrc}
+          preload="metadata"
+          controls
+          className="w-full mb-4"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onError={() => setAudioFailed(true)}
+        />
       ) : (
         <p className="text-xs text-muted mb-4">
-          {ytFailed
-            ? "The video can't play here, so ▶ plays along silently with a click on every beat."
-            : `${song.source === "record" ? "Recorded" : "Captured"} on another device, so there's no audio here. ▶ plays along with a click on every beat.`}
+          {audioFailed
+            ? "The audio couldn't be loaded right now, so ▶ plays along silently with a click on every beat."
+            : `${song.source === "record" ? "Recorded" : "Uploaded"} on another device, so there's no audio here. ▶ plays along with a click on every beat.`}
         </p>
       )}
 
@@ -222,10 +207,11 @@ export function SongView({ song }: { song: SongData }) {
             ["triads", "Basic"],
           ]}
         />
-        <Segmented<"bars" | "lyrics">
+        <Segmented<"tab" | "bars" | "lyrics">
           value={view.mode}
           onChange={(v) => update({ mode: v })}
           options={[
+            ["tab", "Tab"],
             ["bars", "Bars"],
             ["lyrics", "Lyrics"],
           ]}
@@ -255,7 +241,25 @@ export function SongView({ song }: { song: SongData }) {
         ))}
       </div>
 
-      {view.mode === "bars" ? (
+      {view.mode === "tab" ? (
+        <TabSheet
+          a={a}
+          bars={bars}
+          names={names}
+          transpose={view.transpose}
+          capo={capo}
+          now={clock?.now ?? null}
+          follow={view.follow && playing}
+          onSeek={
+            clock
+              ? (t) => {
+                  clock.seek(Math.max(0, t - 0.02));
+                  clock.play();
+                }
+              : undefined
+          }
+        />
+      ) : view.mode === "bars" ? (
         <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
       ) : (
         <LyricsSheet

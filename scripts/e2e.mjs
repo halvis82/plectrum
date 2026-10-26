@@ -72,51 +72,59 @@ async function liveCaptureFlow(page, secs, shot) {
   return { firstChordAfter, liveNow };
 }
 
+/** The Tab view (the default when notes exist) shows bars with fretted notes. */
+async function tabNotes(page) {
+  await page.waitForSelector('[role="img"][aria-label^="Bar"]', { timeout: 20000 });
+  const labels = await page.locator('[role="img"][aria-label^="Bar"]').evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+  const notes = labels.join(" ").match(/fret \d+/g)?.length ?? 0;
+  if (!notes) throw new Error("tab has no notes");
+  return `${labels.length} tab bars, ${notes} notes`;
+}
+
 // ---------- tests ----------
 
-await test("youtube: paste starts capture, live chords, saves, song page plays", async () => {
-  const { page, errors } = await newPage();
-  await paste(page, "https://www.youtube.com/watch?v=IXdNnw99-Ic");
-  const { firstChordAfter, liveNow } = await liveCaptureFlow(page, 20, "yt");
+async function linkFlow(page, link, shot) {
+  const t0 = Date.now();
+  await paste(page, link);
   const id = await songId(page);
+  const secs = (Date.now() - t0) / 1000;
   await page.waitForSelector("figure", { timeout: 20000 });
-  await page.waitForSelector("iframe[src*='youtube-nocookie']", { timeout: 20000 });
-  await page.waitForTimeout(4000);
+  const audio = page.locator("audio");
+  await audio.waitFor({ timeout: 15000 });
   await page.getByRole("button", { name: "Play" }).click();
   await page.waitForTimeout(5000);
-  const beatMarks = await page.locator(".bg-now").count();
-  await page.screenshot({ path: `${SHOTS}/yt-song.png`, fullPage: false });
-  if (!beatMarks) throw new Error("no beat highlight while playing");
-  if (errors.length) throw new Error("page errors: " + errors.join(" | "));
-  return `first live chord after ${firstChordAfter.toFixed(1)}s (${liveNow}), song ${id}`;
-});
+  const t = await audio.evaluate((a) => a.currentTime);
+  const marks = await page.locator(".bg-now:visible").count();
+  await page.screenshot({ path: `${SHOTS}/${shot}-song.png` });
+  if (t < 2) throw new Error(`audio not playing (t=${t})`);
+  if (!marks) throw new Error("no beat highlight while playing");
+  return `${secs.toFixed(1)}s paste-to-chords, plays from server (t=${t.toFixed(1)}s), song ${id}`;
+}
 
-await test("vevo-blocked video: falls back to another upload and captures", async () => {
+await test("youtube: paste -> server audio -> chords -> plays", async () => {
   const { page, errors } = await newPage();
-  await paste(page, "https://www.youtube.com/watch?v=bx1Bh8ZvH84");
-  await page.getByText(/another upload of the same song/).waitFor({ timeout: 40000 });
-  await liveCaptureFlow(page, 8, "vevo");
-  const id = await songId(page);
+  const note = await linkFlow(page, "https://www.youtube.com/watch?v=IXdNnw99-Ic", "yt");
   if (errors.length) throw new Error("page errors: " + errors.join(" | "));
-  return `song ${id}`;
+  return note;
 });
 
-await test("spotify: paste resolves to YouTube and captures", async () => {
+await test("vevo official video: server fetch works", async () => {
   const { page, errors } = await newPage();
-  await paste(page, "https://open.spotify.com/track/1qPbGZqppFwLwcBC1JQ6Vr?si=x");
-  await page.getByText("Wonderwall").first().waitFor({ timeout: 20000 });
-  await liveCaptureFlow(page, 8, "spotify");
-  const id = await songId(page);
+  const note = await linkFlow(page, "https://www.youtube.com/watch?v=bx1Bh8ZvH84", "vevo");
   if (errors.length) throw new Error("page errors: " + errors.join(" | "));
-  return `song ${id}`;
+  return note;
 });
 
-await test("typed link: resolves without Go, Start button captures", async () => {
+await test("spotify: paste -> matched YouTube audio -> chords", async () => {
+  const { page, errors } = await newPage();
+  const note = await linkFlow(page, "https://open.spotify.com/track/1qPbGZqppFwLwcBC1JQ6Vr?si=x", "spotify");
+  if (errors.length) throw new Error("page errors: " + errors.join(" | "));
+  return note;
+});
+
+await test("typed link: starts on its own", async () => {
   const { page } = await newPage();
   await input(page).fill("https://youtu.be/IXdNnw99-Ic");
-  await page.getByRole("button", { name: "▶ Start" }).waitFor({ timeout: 20000 });
-  await page.getByRole("button", { name: "▶ Start" }).click();
-  await liveCaptureFlow(page, 5, "typed");
   return `song ${await songId(page)}`;
 });
 
@@ -127,9 +135,10 @@ await test("upload: file analyzed and saved, local playback", async () => {
   const id = await songId(page);
   const secs = (Date.now() - t0) / 1000;
   await page.waitForSelector("audio", { timeout: 15000 });
+  const tab = await tabNotes(page);
   await page.screenshot({ path: `${SHOTS}/upload-song.png`, fullPage: false });
   if (errors.length) throw new Error("page errors: " + errors.join(" | "));
-  return `${secs.toFixed(1)}s for a 4:17 song, song ${id}`;
+  return `${secs.toFixed(1)}s for a 4:17 song, ${tab}, song ${id}`;
 });
 
 await test("listen (mic) on a phone: silent start, live chords, done", async () => {
@@ -137,9 +146,10 @@ await test("listen (mic) on a phone: silent start, live chords, done", async () 
   await page.getByRole("button", { name: /Listen/ }).click();
   const r = await liveCaptureFlow(page, 15, "listen");
   const id = await songId(page);
+  const tab = await tabNotes(page);
   await page.screenshot({ path: `${SHOTS}/listen-song.png` });
   if (errors.length) throw new Error("page errors: " + errors.join(" | "));
-  return `first live chord after ${r.firstChordAfter.toFixed(1)}s, song ${id}`;
+  return `first live chord after ${r.firstChordAfter.toFixed(1)}s, ${tab}, song ${id}`;
 });
 
 await test("song page on another device: play-along clock works", async () => {
@@ -150,7 +160,7 @@ await test("song page on another device: play-along clock works", async () => {
   await page.goto(`${BASE}/song/${upload ?? id}`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Play" }).click();
   await page.waitForTimeout(4000);
-  const marks = await page.locator(".bg-now").count();
+  const marks = await page.locator(".bg-now:visible").count();
   await page.screenshot({ path: `${SHOTS}/playalong.png` });
   if (!marks) throw new Error("beat highlight not moving");
   return "beat highlight moves without audio";

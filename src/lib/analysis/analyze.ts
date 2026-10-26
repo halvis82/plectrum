@@ -3,6 +3,7 @@
 import { estimateTempo, onsetEnvelope, trackBeats } from "./beats";
 import { FRAMES_PER_CHUNK, N_BINS, SR, frameTimes, logCqt, type CqtBasis } from "./cqt";
 import { N_CLASSES, beatChords, toSegments, viterbi, type Segment } from "./decode";
+import { decodeNotes, noteActivations, type RunNotes } from "./notes";
 
 /** Decoding knobs (tuned on GuitarSet, see scripts/guitarset-tune.mts). */
 export type DecodeOptions = {
@@ -46,9 +47,11 @@ export type Analysis = {
   chords: number[];
   /** frame-level smoothed segments [start, end, class] */
   segments: Segment[];
+  /** every transcribed note: [start s, end s, MIDI pitch, strength 0..1]; absent on older songs */
+  notes?: [number, number, number, number][];
 };
 
-export type Progress = (stage: "features" | "chords" | "beats", p: number) => void;
+export type Progress = (stage: "features" | "chords" | "beats" | "notes", p: number) => void;
 
 export async function analyze(
   y: Float32Array,
@@ -57,12 +60,18 @@ export async function analyze(
   run: RunWindow,
   onProgress?: Progress,
   opts: DecodeOptions = DEFAULT_DECODE,
+  runNotes?: RunNotes,
 ): Promise<Analysis> {
   const frames = await chordFrames(y, basis, meta, run, onProgress, TTA_SHIFTS);
   onProgress?.("beats", 0.5);
   const r = rhythm(y);
   onProgress?.("beats", 1);
-  return decode(frames, r, y.length / SR, opts);
+  const result = decode(frames, r, y.length / SR, opts);
+  if (runNotes) {
+    const act = await noteActivations(y, runNotes, (p) => onProgress?.("notes", p));
+    result.notes = decodeNotes(act).map((n) => [round(n.start), round(n.end), n.midi, Math.round(n.amp * 100) / 100]);
+  }
+  return result;
 }
 
 export type ChordFrames = {

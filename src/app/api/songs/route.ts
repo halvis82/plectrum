@@ -14,7 +14,7 @@ const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.
 
 export async function POST(req: Request) {
   const raw = await req.text();
-  if (raw.length > 1_500_000) return Response.json({ error: "Too large" }, { status: 413 });
+  if (raw.length > 4_000_000) return Response.json({ error: "Too large" }, { status: 413 });
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(raw);
