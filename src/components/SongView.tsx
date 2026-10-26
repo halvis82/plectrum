@@ -18,6 +18,7 @@ import {
 import { ChordDiagram } from "./ChordDiagram";
 import { TabSheet } from "./TabSheet";
 import { TUNINGS, detectTuning, type TuningId } from "@/lib/tab";
+import { usePendingNotes } from "@/lib/pending";
 
 export type SongData = {
   id: string;
@@ -54,7 +55,11 @@ function usePrefs(id: string) {
 }
 
 export function SongView({ song }: { song: SongData }) {
-  const a = song.analysis;
+  // a song just made here: its notes may still be on their way
+  const pending = usePendingNotes(song.id);
+  const pendingNotes = pending?.notes;
+  const a = useMemo(() => (pendingNotes ? { ...song.analysis, notes: pendingNotes } : song.analysis), [song.analysis, pendingNotes]);
+  const notesComing = !a.notes && !!pending && !pending.error;
   const stats = useMemo(() => songStats(a), [a]);
   const bars = useMemo(() => buildBars(a), [a]);
   const { view, setView, update, storageKey } = usePrefs(song.id);
@@ -64,8 +69,8 @@ export function SongView({ song }: { song: SongData }) {
     try {
       saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
     } catch {}
-    setView(saved ?? { transpose: 0, capo: null, simplify: "full", mode: a.notes ? "tab" : "bars", follow: true, lyricOffset: 0 });
-  }, [storageKey, setView, a.notes]);
+    setView(saved ?? { transpose: 0, capo: null, simplify: "full", mode: a.notes || notesComing ? "tab" : "bars", follow: true, lyricOffset: 0 });
+  }, [storageKey, setView, a.notes, notesComing]);
 
   // ---- playback ----
   const [mediaClock, setClock] = useState<Clock | null>(null);
@@ -292,7 +297,15 @@ export function SongView({ song }: { song: SongData }) {
           ))}
         </p>
       )}
-      {view.mode === "tab" ? (
+      {pending?.error && <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{pending.error}</p>}
+      {view.mode === "tab" && notesComing ? (
+        <div className="mt-6 rounded-2xl border border-line bg-surface p-5">
+          <p className="text-sm">{pending.label}… the chords are ready above, and the tab appears here when every note is in.</p>
+          <div className="mt-3 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+            <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
+          </div>
+        </div>
+      ) : view.mode === "tab" ? (
         <TabSheet
           a={a}
           bars={bars}

@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { customAlphabet } from "nanoid";
 import { listSongs, sql } from "@/lib/server/db";
 import { validAnalysis } from "@/lib/analysis/validate";
@@ -32,7 +33,14 @@ export async function POST(req: Request) {
   if (!source || !validAnalysis(body.analysis)) return Response.json({ error: "Invalid analysis" }, { status: 400 });
   const a = body.analysis;
   const id = newId();
-  await sql`insert into songs (id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis)
-    values (${id}, ${title}, ${artist}, ${source}, ${sourceUrl}, ${youtubeId}, ${audioUrl}, ${a.duration}, ${a.bpm}, ${a.meter}, ${songKey}, ${JSON.stringify(a)})`;
-  return Response.json({ id });
+  // songs arrive with their chords first; the browser that made one adds the notes with this key
+  const editKey = a.notes ? null : randomBytes(18).toString("base64url");
+  if (youtubeId || sourceUrl) {
+    // the same link saved before whose notes never arrived (its tab was closed early): replaced by this one
+    await sql`delete from songs where (youtube_id = ${youtubeId} or source_url = ${sourceUrl})
+      and analysis->'notes' is null and (edit_key is null or created_at < now() - interval '1 hour')`;
+  }
+  await sql`insert into songs (id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, edit_key)
+    values (${id}, ${title}, ${artist}, ${source}, ${sourceUrl}, ${youtubeId}, ${audioUrl}, ${a.duration}, ${a.bpm}, ${a.meter}, ${songKey}, ${JSON.stringify(a)}, ${editKey})`;
+  return Response.json({ id, editKey });
 }

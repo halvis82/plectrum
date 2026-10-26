@@ -72,13 +72,24 @@ async function liveCaptureFlow(page, secs, shot) {
   return { firstChordAfter, liveNow };
 }
 
-/** The Tab view (the default when notes exist) shows bars with fretted notes. */
+/** The Tab view (the default when notes exist) shows bars with fretted notes. A new song opens with
+ * its chords while the notes are still coming, so this waits for them, then reloads to check the
+ * notes were saved to the song. */
 async function tabNotes(page) {
-  await page.waitForSelector('[role="img"][aria-label^="Bar"]', { timeout: 20000 });
-  const labels = await page.locator('[role="img"][aria-label^="Bar"]').evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
-  const notes = labels.join(" ").match(/fret \d+/g)?.length ?? 0;
-  if (!notes) throw new Error("tab has no notes");
-  return `${labels.length} tab bars, ${notes} notes`;
+  const count = async (timeout) => {
+    await page.waitForSelector('[role="img"][aria-label^="Bar"]', { timeout });
+    const labels = await page.locator('[role="img"][aria-label^="Bar"]').evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+    return { bars: labels.length, notes: labels.join(" ").match(/fret \d+/g)?.length ?? 0 };
+  };
+  const t0 = Date.now();
+  const live = await count(300000);
+  const secs = (Date.now() - t0) / 1000;
+  if (!live.notes) throw new Error("tab has no notes");
+  await page.waitForTimeout(3000);
+  await page.reload({ waitUntil: "networkidle" });
+  const saved = await count(20000);
+  if (saved.notes !== live.notes) throw new Error(`saved tab has ${saved.notes} notes, ${live.notes} were shown`);
+  return `${live.bars} tab bars, ${live.notes} notes (tab ${secs.toFixed(0)}s after the chords, saved)`;
 }
 
 // ---------- tests ----------

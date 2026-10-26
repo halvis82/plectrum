@@ -19,6 +19,8 @@ export type WorkerRequest =
 
 export type WorkerMessage =
   | { id: number; type: "progress"; stage: "model" | "features" | "chords" | "beats" | "notes"; p: number }
+  /** the chords, while the notes are still being transcribed */
+  | { id: number; type: "chords"; result: Analysis }
   | { id: number; type: "done"; result: Analysis }
   | { id: number; type: "live"; frames: Int32Array; hop: number }
   | { id: number; type: "loaded" }
@@ -33,6 +35,7 @@ const GUITAR_MODEL = "/model/guitar.v1.onnx";
 const GUITAR_WEIGHTS = "/model/guitar.v1.f16";
 
 let chords: Promise<{ session: ort.InferenceSession; strings: ort.InferenceSession; basis: CqtBasis; meta: ModelMeta }> | null = null;
+let chordsReady = false;
 let guitar: Promise<ort.InferenceSession> | null = null;
 /** download progress of the note model's weights, 0..1 */
 let guitarLoaded = 0;
@@ -47,6 +50,7 @@ function loadChords() {
     ]);
     const session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"] });
     const strings = await ort.InferenceSession.create(stringsModel, { executionProviders: ["wasm"] });
+    chordsReady = true;
     return { session, strings, basis: parseBasis(basisBuf), meta };
   })();
   chords.catch(() => (chords = null));
@@ -115,7 +119,7 @@ async function handle(req: WorkerRequest) {
       void loadGuitar().catch(() => {});
       return post({ id: req.id, type: "loaded" });
     }
-    post({ id: req.id, type: "progress", stage: "model", p: 0 });
+    if (!chordsReady) post({ id: req.id, type: "progress", stage: "model", p: 0 });
     const { session, strings, basis, meta } = await loadChords();
     const run = async (x: Float32Array) => {
       const out = await session.run({ x: new ort.Tensor("float32", x, [1, FRAMES_PER_CHUNK, N_BINS]) });
@@ -129,11 +133,11 @@ async function handle(req: WorkerRequest) {
       const logp = (await run(x)).subarray(0, n * N_CLASSES);
       return post({ id: req.id, type: "live", frames: viterbi(logp, n, N_CLASSES, 4), hop: HOP / SR });
     }
-    // first time only: the note model may still be downloading
-    const loading = setInterval(() => post({ id: req.id, type: "progress", stage: "model", p: guitarLoaded }), 250);
-    const notes = await loadGuitar().finally(() => clearInterval(loading));
-    post({ id: req.id, type: "progress", stage: "model", p: 1 });
     const transcribe = async (y: Float32Array, onProgress: (p: number) => void) => {
+      // first time only: the note model may still be downloading
+      const loading = setInterval(() => post({ id: req.id, type: "progress", stage: "model", p: guitarLoaded }), 250);
+      const notes = await loadGuitar().finally(() => clearInterval(loading));
+      post({ id: req.id, type: "progress", stage: "model", p: 1 });
       const runGuitar = async (x: Float32Array, n: number) => {
         const out = await notes.run({ audio: new ort.Tensor("float32", x, [n, SEGMENT]) });
         return {
@@ -149,7 +153,9 @@ async function handle(req: WorkerRequest) {
       const out = await strings.run({ patch: new ort.Tensor("float32", patches, [n, NF, NB]), midi: new ort.Tensor("float32", midi, [n]) });
       return out.logits.data as Float32Array;
     };
-    const result = await analyze(req.samples, basis, meta, run, (stage, p) => post({ id: req.id, type: "progress", stage, p }), undefined, transcribe, runStrings);
+    const result = await analyze(req.samples, basis, meta, run, (stage, p) => post({ id: req.id, type: "progress", stage, p }), undefined, transcribe, runStrings, (chords) =>
+      post({ id: req.id, type: "chords", result: chords }),
+    );
     post({ id: req.id, type: "done", result });
   } catch (err) {
     post({ id: req.id, type: "error", message: err instanceof Error ? err.message : String(err) });

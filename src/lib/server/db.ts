@@ -33,3 +33,16 @@ export async function getSong(id: string): Promise<Song | null> {
     returning id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, views, created_at`) as Song[];
   return rows[0] ?? null;
 }
+
+/** A library song made from the same video or page with the current note models (10-wide note rows),
+ * so a repeated link opens it instead of analyzing the song again. */
+export async function findExisting(youtubeId: string | null, sourceUrl: string | null): Promise<string | null> {
+  if (!youtubeId && !sourceUrl) return null;
+  const rows = (await sql`
+    select id from songs
+    where (youtube_id = ${youtubeId} or source_url = ${sourceUrl} or audio_url = ${sourceUrl})
+      and jsonb_array_length(analysis->'notes'->0) = 10
+    order by created_at desc
+    limit 1`) as { id: string }[];
+  return rows[0]?.id ?? null;
+}

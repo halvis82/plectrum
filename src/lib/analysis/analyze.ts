@@ -69,12 +69,15 @@ export async function analyze(
   opts: DecodeOptions = DEFAULT_DECODE,
   transcribe?: Transcribe,
   runStrings?: RunStrings,
+  /** called with the chords before the (much slower) note transcription starts */
+  onChords?: (a: Analysis) => void,
 ): Promise<Analysis> {
   const frames = await chordFrames(y, basis, meta, run, onProgress, TTA_SHIFTS);
   onProgress?.("beats", 0.5);
   const r = rhythm(y);
   onProgress?.("beats", 1);
   const result = decode(frames, r, y.length / SR, opts);
+  onChords?.(result);
   if (transcribe) {
     const notes = await transcribe(y, (p) => onProgress?.("notes", p));
     const probs = runStrings ? await stringProbs(y, notes, runStrings) : null;

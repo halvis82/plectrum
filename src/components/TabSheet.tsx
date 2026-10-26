@@ -88,7 +88,7 @@ export function TabSheet({
   }, [now, spans, follow]);
 
   if (!a.notes)
-    return <p className="mt-6 text-sm text-muted">This song was caught before tabs existed. Catch it again to get the note-by-note tab.</p>;
+    return <p className="mt-6 text-sm text-muted">There&apos;s no tab for this one yet: it was caught before tabs existed, or its page was closed before every note was in. Catch it again to get the note-by-note tab.</p>;
   if (!tab.length) return <p className="mt-6 text-sm text-muted">No guitar-range notes were heard in this recording.</p>;
 
   return (

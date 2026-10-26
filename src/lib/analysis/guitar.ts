@@ -86,24 +86,30 @@ export function halfToFloat(h: Uint16Array): Float32Array {
   return out;
 }
 
-/** 16 kHz audio -> frame activations at 100 fps, from half-overlapping 10 s segments. */
-export async function guitarActivations(y: Float32Array, run: RunGuitar, onProgress?: (p: number) => void, batch = 1): Promise<GuitarActivations> {
-  const padded = new Float32Array(Math.max(1, Math.ceil(y.length / SEGMENT)) * SEGMENT);
+/** Frames trimmed from each side of a segment where it overlaps its neighbors. The reference keeps
+ * the middle half (2.5 s margins, twice the compute); 0.5 s scored the same on held-out GuitarSet
+ * players and mixes (notes F1 89.2 comp, 91.4 solo, 86.0 mix with either) at 45% less compute. */
+export const DEFAULT_MARGIN = 50;
+
+/** 16 kHz audio -> frame activations at 100 fps, from overlapping 10 s segments. */
+export async function guitarActivations(y: Float32Array, run: RunGuitar, onProgress?: (p: number) => void, batch = 1, margin = DEFAULT_MARGIN): Promise<GuitarActivations> {
+  const step = (SEG_FRAMES - 2 * margin) * 160; // samples between segment starts
+  const nSeg = y.length <= SEGMENT ? 1 : Math.ceil((y.length - SEGMENT) / step) + 1;
+  const padded = new Float32Array((nSeg - 1) * step + SEGMENT);
   padded.set(y);
-  const nSeg = 2 * (padded.length / SEGMENT) - 1;
-  const total = nSeg === 1 ? SEG_FRAMES + 1 : (nSeg + 1) * (SEG_FRAMES / 2);
+  const total = nSeg === 1 ? SEG_FRAMES + 1 : (nSeg - 1) * (SEG_FRAMES - 2 * margin) + SEG_FRAMES;
   const acts = { onset: new Float32Array(total * P), offset: new Float32Array(total * P), frame: new Float32Array(total * P), velocity: new Float32Array(total * P) };
   let row = 0;
   for (let s = 0; s < nSeg; s += batch) {
     const n = Math.min(batch, nSeg - s);
     const x = new Float32Array(n * SEGMENT);
-    for (let k = 0; k < n; k++) x.set(padded.subarray(((s + k) * SEGMENT) / 2, ((s + k) * SEGMENT) / 2 + SEGMENT), k * SEGMENT);
+    for (let k = 0; k < n; k++) x.set(padded.subarray((s + k) * step, (s + k) * step + SEGMENT), k * SEGMENT);
     const out = await run(x, n);
     for (let k = 0; k < n; k++) {
       const i = s + k;
-      // keep the middle half of each segment (the first keeps its start, the last its end)
-      const from = nSeg === 1 || i === 0 ? 0 : SEG_FRAMES / 4;
-      const to = nSeg === 1 ? SEG_FRAMES + 1 : i === nSeg - 1 ? SEG_FRAMES : (3 * SEG_FRAMES) / 4;
+      // drop the overlapping margins (the first segment keeps its start, the last its end)
+      const from = nSeg === 1 || i === 0 ? 0 : margin;
+      const to = nSeg === 1 ? SEG_FRAMES + 1 : i === nSeg - 1 ? SEG_FRAMES : SEG_FRAMES - margin;
       for (const key of ["onset", "offset", "frame", "velocity"] as const) {
         const src = out[key].subarray(k * (SEG_FRAMES + 1) * P, (k + 1) * (SEG_FRAMES + 1) * P);
         acts[key].set(src.subarray(from * P, to * P), row * P);

@@ -44,7 +44,7 @@ export class Analyzer {
     const id = this.next++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, (m) => {
-        if (m.type === "progress") return onMsg(m);
+        if (m.type === "progress" || m.type === "chords") return onMsg(m);
         this.pending.delete(id);
         if (m.type === "error") reject(new Error(m.message));
         else resolve(m);
@@ -53,8 +53,12 @@ export class Analyzer {
     });
   }
 
-  async analyze(samples: Float32Array, onProgress?: (stage: Stage, p: number) => void): Promise<Analysis> {
-    const m = await this.call({ type: "analyze", samples }, (m) => m.type === "progress" && onProgress?.(m.stage, m.p));
+  /** The full analysis; `onChords` gets the chords first, while the notes are still being worked out. */
+  async analyze(samples: Float32Array, onProgress?: (stage: Stage, p: number) => void, onChords?: (a: Analysis) => void): Promise<Analysis> {
+    const m = await this.call({ type: "analyze", samples }, (m) => {
+      if (m.type === "progress") onProgress?.(m.stage, m.p);
+      else if (m.type === "chords") onChords?.(m.result);
+    });
     if (m.type !== "done") throw new Error("Unexpected worker reply");
     return m.result;
   }
@@ -74,6 +78,10 @@ export class Analyzer {
     this.worker.terminate();
   }
 }
+
+let shared: Analyzer | null = null;
+/** One worker for the whole visit: it keeps working on a song's notes after the page has moved on. */
+export const sharedAnalyzer = () => (shared ??= new Analyzer());
 
 // ---------- microphone ----------
 

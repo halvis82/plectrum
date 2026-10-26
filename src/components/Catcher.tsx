@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
-import { Analyzer, SR, decodeToMono, getMicStream, saveLocalAudio, type Stage } from "@/lib/audio";
+import { SR, decodeToMono, getMicStream, saveLocalAudio, sharedAnalyzer, type Stage } from "@/lib/audio";
+import { setPending } from "@/lib/pending";
 import { PcmCapture, encodeWav, resample } from "@/lib/capture";
 import { chordName, detectKey, keyName, labelFromIndex, parseLabel, spellingFor } from "@/lib/music";
 import { songStats } from "@/lib/sheet";
@@ -16,6 +17,8 @@ type Resolved = {
   sourceUrl: string;
   alternatives: string[];
   duration: number | null;
+  /** a library song already made from this link */
+  existing?: string | null;
 };
 type Meta = { title: string; artist: string | null; source: string; sourceUrl?: string; youtubeId?: string; audioUrl?: string };
 /** what /api/media found (its x-media header) */
@@ -52,24 +55,22 @@ export function Catcher() {
   const [song, setSong] = useState<Card | null>(null);
   const [live, setLive] = useState<Live | null>(null);
   const [drag, setDrag] = useState(false);
-  const analyzer = useRef<Analyzer | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
   const cancelRef = useRef<(() => void) | null>(null);
   const lastLink = useRef("");
   const fileInput = useRef<HTMLInputElement>(null);
   const busy = phase.kind !== "idle";
 
-  /** The 13 MB model starts loading in the background and is cached afterwards. */
+  /** The chord model starts loading in the background and is cached afterwards. */
   const getAnalyzer = () => {
-    analyzer.current ??= new Analyzer();
+    const an = sharedAnalyzer();
     // someone is about to catch a song: start the large note model download
-    analyzer.current.prefetch();
-    return analyzer.current;
+    an.prefetch();
+    return an;
   };
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500));
-    idle(() => (analyzer.current ??= new Analyzer()));
-    return () => analyzer.current?.terminate();
+    idle(() => sharedAnalyzer());
   }, []);
 
   function fail(message: string) {
@@ -92,6 +93,7 @@ export function Catcher() {
       let r = await fetch(`/api/resolve?url=${encodeURIComponent(link.trim())}`);
       let resolved: Resolved = await r.json();
       if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
+      if (resolved.existing) return router.push(`/song/${resolved.existing}`);
       const progress = (p: number) => setPhase({ kind: "working", label: "Getting the audio", p });
 
       // any other site: the server downloads it with yt-dlp
@@ -101,7 +103,7 @@ export function Catcher() {
         const got = await download(`/api/media?url=${encodeURIComponent(resolved.sourceUrl)}`, progress);
         if ("blob" in got) {
           const m = got.meta!;
-          setSong({ title: m.title, artist: m.artist, image: m.thumbnail });
+          setSong({ title: m.title, artist: m.artist, image: thumb(m.thumbnail) });
           setPhase({ kind: "working", label: "Reading the audio" });
           const samples = await decodeToMono(got.blob);
           const page = m.page ?? resolved.sourceUrl;
@@ -114,6 +116,7 @@ export function Catcher() {
         r = await fetch(`/api/resolve?${q}`);
         resolved = await r.json();
         if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
+        if (resolved.existing) return router.push(`/song/${resolved.existing}`);
       }
 
       const ytImage = (id: string | null) => (id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : null);
@@ -147,7 +150,7 @@ export function Catcher() {
         setSong({
           title: resolved.title,
           artist: resolved.artist,
-          image: m.thumbnail,
+          image: thumb(m.thumbnail),
           note: `YouTube wouldn't share this one, so this uses "${m.title}"${m.artist ? ` by ${m.artist}` : ""} from ${SITE_NAME[m.site] ?? m.site}.`,
         });
       }
@@ -237,7 +240,23 @@ export function Catcher() {
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       if (samples.length < SR * 3 || peak < 0.003) throw new Error("There wasn't enough music to work with. Give it at least a few seconds.");
       if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
-      const analysis: Analysis = await getAnalyzer().analyze(samples, (stage, p) => setPhase({ kind: "working", label: STAGE_LABEL[stage], p }));
+      // the song opens as soon as its chords are in; the page then shows the tab filling in
+      let songId: string | null = null;
+      let notesProgress: { label: string; p: number } | null = null;
+      let gotChords!: (a: Analysis) => void;
+      const chords = new Promise<Analysis>((resolve) => (gotChords = resolve));
+      const full = getAnalyzer().analyze(
+        samples,
+        (stage, p) => {
+          const label = STAGE_LABEL[stage];
+          if (songId) setPending(songId, { label, p });
+          else if (notesProgress) notesProgress = { label, p };
+          else setPhase({ kind: "working", label, p });
+        },
+        gotChords,
+      );
+      const analysis = await Promise.race([chords, full]);
+      notesProgress = { label: STAGE_LABEL.notes, p: 0 };
       setPhase({ kind: "working", label: "Saving to the library" });
       const res = await fetch("/api/songs", {
         method: "POST",
@@ -246,6 +265,21 @@ export function Catcher() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Saving failed");
+      if (!analysis.notes) {
+        const id: string = (songId = body.id);
+        setPending(id, notesProgress);
+        void full
+          .then(async ({ notes }) => {
+            setPending(id, { notes });
+            const saved = await fetch(`/api/songs/${id}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ editKey: body.editKey, notes }),
+            }).catch(() => null);
+            if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved, so it only shows on this device until you reload." });
+          })
+          .catch((e) => setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` }));
+      }
       if (localAudio) await saveLocalAudio(body.id, localAudio);
       router.push(`/song/${body.id}`);
     } catch (e) {
@@ -384,6 +418,9 @@ export function Catcher() {
     </section>
   );
 }
+
+/** Other sites' cover art goes through this origin (see /api/thumb). */
+const thumb = (url: string | null) => (url ? `/api/thumb?u=${encodeURIComponent(url)}` : null);
 
 /** Downloads with progress, plus what /api/media says it found; an error message if the server couldn't get it. */
 async function download(

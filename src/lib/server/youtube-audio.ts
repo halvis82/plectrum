@@ -94,8 +94,8 @@ const CLIENT_ORDER: Record<Session["mode"], readonly ("WEB" | "MWEB" | "TV" | "W
 
 export class YouTubeError extends Error {}
 
-export async function audioSource(videoId: string): Promise<AudioSource> {
-  const hit = cache.get(videoId);
+export async function audioSource(videoId: string, fresh = false): Promise<AudioSource> {
+  const hit = fresh ? null : cache.get(videoId);
   if (hit && hit.expires > Date.now() + 10 * 60_000) return hit;
   const problems: string[] = [];
   const src = (await fromYouTube(videoId, problems).catch((e) => (problems.push(`session: ${e instanceof Error ? e.message : e}`), null))) ?? (await fromInvidious(videoId, problems));
@@ -201,8 +201,27 @@ async function fromInvidious(videoId: string, problems: string[]): Promise<Audio
   return null;
 }
 
-/** Streams the audio, fetching from YouTube in ranged chunks (whole-file requests get throttled). */
-export function streamAudio(src: AudioSource, from = 0, to = src.bytes - 1): ReadableStream<Uint8Array> {
+/** Streams the audio, fetching from YouTube in ranged chunks (whole-file requests get throttled).
+ * The first chunk is fetched before this resolves, so a stream URL that stopped working (they can
+ * expire early, mirrors especially) throws here instead of failing the response midway. */
+export async function openAudio(src: AudioSource, from = 0, to = src.bytes - 1): Promise<ReadableStream<Uint8Array>> {
+  const reader = streamAudio(src, from, to).getReader();
+  const first = await reader.read();
+  return new ReadableStream({
+    start(controller) {
+      if (first.done) controller.close();
+      else controller.enqueue(first.value);
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
+
+function streamAudio(src: AudioSource, from: number, to: number): ReadableStream<Uint8Array> {
   const CHUNK = 4 * 1024 * 1024;
   let pos = from;
   return new ReadableStream({

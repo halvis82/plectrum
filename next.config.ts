@@ -15,6 +15,14 @@ const nextConfig: NextConfig = {
           { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
         ],
       },
+      // WebKit (Safari, and every browser on iPhone) has no "credentialless", so without this it
+      // runs the note model on one thread. Its only cross-origin images are YouTube thumbnails,
+      // which send CORP; other cover art goes through /api/thumb.
+      {
+        source: "/:path*",
+        has: [{ type: "header", key: "user-agent", value: "^(?!.*(Chrome/|Chromium/|Firefox/)).*AppleWebKit.*$" }],
+        headers: [{ key: "Cross-Origin-Embedder-Policy", value: "require-corp" }],
+      },
     ];
   },
   serverExternalPackages: ["jsdom", "bgutils-js"],
