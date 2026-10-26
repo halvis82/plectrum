@@ -45,7 +45,7 @@ async function test(name, fn) {
   console.log(results.at(-1).ok ? "PASS" : "FAIL", name, results.at(-1).note ?? "");
 }
 
-const input = (page) => page.getByLabel("YouTube or Spotify link");
+const input = (page) => page.getByLabel("Song link");
 
 async function paste(page, text) {
   await input(page).click();
