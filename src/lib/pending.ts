@@ -4,10 +4,11 @@
 // here and the finished notes are saved to the song.
 
 import { useSyncExternalStore } from "react";
-import type { Analysis } from "./analysis/analyze";
+import type { Analysis, NoteRow } from "./analysis/analyze";
 
-/** `analysis`: the finished one, notes and the chords decided with them */
-export type PendingNotes = { label: string; p: number | undefined; analysis?: Analysis; error?: string };
+/** `partial`: the tab so far (notes starting before `upTo` seconds); `analysis`: the finished one,
+ * notes and the chords decided with them */
+export type PendingNotes = { label: string; p: number | undefined; partial?: { notes: NoteRow[]; upTo: number }; analysis?: Analysis; error?: string };
 
 const jobs = new Map<string, PendingNotes>();
 const listeners = new Set<() => void>();

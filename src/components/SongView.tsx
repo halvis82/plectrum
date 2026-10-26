@@ -61,6 +61,9 @@ export function SongView({ song }: { song: SongData }) {
   const pending = usePendingNotes(song.id);
   const a = pending?.analysis ?? song.analysis;
   const notesComing = !a.notes && !!pending && !pending.error;
+  // the tab so far, while the rest is still being worked out
+  const partial = notesComing ? pending.partial : undefined;
+  const tabA = useMemo(() => (partial ? { ...a, notes: partial.notes } : a), [a, partial]);
   const stats = useMemo(() => songStats(a), [a]);
   const bars = useMemo(() => buildBars(a), [a]);
   const { view, setView, update, storageKey } = usePrefs(song.id);
@@ -300,19 +303,29 @@ export function SongView({ song }: { song: SongData }) {
       )}
       <div data-pane onWheel={touchPane} onTouchMove={touchPane} className="mt-4 max-h-[78dvh] overflow-y-auto overscroll-contain rounded-2xl border border-line px-3 pb-4 -mx-1">
         {pending?.error && <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{pending.error}</p>}
-        {view.mode === "tab" && notesComing ? (
-          <>
-            <div className="mt-6 rounded-2xl border border-line bg-surface p-5">
-              <p className="text-sm">{pending.label}… the tab replaces the chord sheet below when every note is in.</p>
-              <div className="mt-3 h-1.5 rounded-full bg-surface-2 overflow-hidden">
-                <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
-              </div>
+        {view.mode === "tab" && notesComing && (
+          <div className="sticky top-0 z-[1] -mx-3 px-3 pt-3 pb-2 bg-bg/95 backdrop-blur border-b border-line">
+            <p className="text-sm">
+              {pending.label}…{" "}
+              {partial ? (
+                <span className="text-muted">
+                  tab ready up to {clockTime(partial.upTo)} of {clockTime(a.duration)}
+                </span>
+              ) : (
+                <span className="text-muted">the first bars of the tab appear here in a few seconds; the chords below already follow the music</span>
+              )}
+            </p>
+            <div className="mt-2 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+              <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
             </div>
-            <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
-          </>
+          </div>
+        )}
+        {view.mode === "tab" && notesComing && !partial ? (
+          <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
         ) : view.mode === "tab" ? (
           <TabSheet
-            a={a}
+            a={tabA}
+            upTo={partial?.upTo}
             bars={bars}
             names={names}
             transpose={view.transpose}
@@ -352,6 +365,8 @@ export function SongView({ song }: { song: SongData }) {
     </div>
   );
 }
+
+const clockTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 function BarsSheet({
   bars,

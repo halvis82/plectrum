@@ -36,6 +36,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   chords: "Recognizing chords",
   beats: "Finding the beat",
   notes: "Catching every note",
+  paused: "Paused while your newest song's tab is made",
 };
 
 const LINK_RE = /^\s*https?:\/\/[^\s/]+\.[^\s]+/i;
@@ -240,23 +241,10 @@ export function Catcher() {
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       if (samples.length < SR * 3 || peak < 0.003) throw new Error("There wasn't enough music to work with. Give it at least a few seconds.");
       if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
-      // the song opens as soon as its chords are in; the page then shows the tab filling in
-      let songId: string | null = null;
-      let notesProgress: { label: string; p: number } | null = null;
-      let gotChords!: (a: Analysis) => void;
-      const chords = new Promise<Analysis>((resolve) => (gotChords = resolve));
-      const full = getAnalyzer().analyze(
-        samples,
-        (stage, p) => {
-          const label = STAGE_LABEL[stage];
-          if (songId) setPending(songId, { label, p });
-          else if (notesProgress) notesProgress = { label, p };
-          else setPhase({ kind: "working", label, p });
-        },
-        gotChords,
-      );
-      const analysis = await Promise.race([chords, full]);
-      notesProgress = { label: STAGE_LABEL.notes, p: 0 };
+      // the song opens as soon as its chords are in; its page then shows the tab filling in
+      const an = getAnalyzer();
+      const pass = await an.chords(samples, (stage, p) => setPhase({ kind: "working", label: STAGE_LABEL[stage], p }));
+      const analysis = pass.result;
       setPhase({ kind: "working", label: "Saving to the library" });
       const res = await fetch("/api/songs", {
         method: "POST",
@@ -265,24 +253,32 @@ export function Catcher() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Saving failed");
-      if (!analysis.notes) {
-        const id: string = (songId = body.id);
-        setPending(id, notesProgress);
-        void full
-          .then(async (done) => {
-            setPending(id, { analysis: done });
-            const { notes, chords, segments, meter, downbeat } = done;
-            const saved = await fetch(`/api/songs/${id}`, {
-              method: "PATCH",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ editKey: body.editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
-            }).catch(() => null);
-            if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved, so it only shows on this device until you reload." });
-          })
-          .catch((e) => setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` }));
-      }
-      if (localAudio) await saveLocalAudio(body.id, localAudio);
-      router.push(`/song/${body.id}`);
+      const id: string = body.id;
+      setPending(id, { label: STAGE_LABEL.notes, p: 0 });
+      void an
+        .tab(samples, pass, {
+          // a paused tab keeps its progress bar where it was
+          progress: (stage, p) => setPending(id, stage === "paused" ? { label: STAGE_LABEL.paused } : { label: STAGE_LABEL[stage], p }),
+          partial: (notes, upTo) => setPending(id, { partial: { notes, upTo } }),
+        })
+        .then(async (done) => {
+          setPending(id, { analysis: done });
+          const { notes, chords, segments, meter, downbeat } = done;
+          const saved = await fetch(`/api/songs/${id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ editKey: body.editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
+          }).catch(() => null);
+          if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved, so it only shows on this device until you reload." });
+        })
+        .catch((e) => setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` }));
+      if (localAudio) await saveLocalAudio(id, localAudio);
+      // this page is kept for the way back ("New song"), so leave it ready for the next one
+      setPhase({ kind: "idle" });
+      setSong(null);
+      setUrl("");
+      lastLink.current = "";
+      router.push(`/song/${id}`);
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     }

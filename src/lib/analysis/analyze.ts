@@ -65,6 +65,37 @@ export type Transcribe = (y: Float32Array, onProgress: (p: number) => void) => P
 
 export type Progress = (stage: "features" | "chords" | "beats" | "notes", p: number) => void;
 
+/** What the chord pass leaves for the notes pass: frame log-probs and the beat grid. */
+export type ChordPass = { result: Analysis; frames: ChordFrames; rhythm: Rhythm; duration: number };
+
+/** Chords and beats; seconds for a whole song. */
+export async function analyzeChords(y: Float32Array, basis: CqtBasis, meta: ModelMeta, run: RunWindow, onProgress?: Progress, opts: DecodeOptions = DEFAULT_DECODE): Promise<ChordPass> {
+  const frames = await chordFrames(y, basis, meta, run, onProgress, TTA_SHIFTS);
+  onProgress?.("beats", 0.5);
+  const r = rhythm(y);
+  onProgress?.("beats", 1);
+  return { result: decode(frames, r, y.length / SR, opts), frames, rhythm: r, duration: y.length / SR };
+}
+
+/** Notes as stored: [start, end, MIDI, strength] plus each string's probability when known. */
+export function noteRows(notes: Note[], probs: ArrayLike<number> | null): NoteRow[] {
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  return notes.map((n, i): NoteRow => {
+    const row: NoteRow = [round(n.start), round(n.end), n.midi, r2(n.amp)];
+    if (probs) for (let s = 0; s < 6; s++) row.push(r2(probs[i * 6 + s]));
+    return row;
+  });
+}
+
+/** The final analysis: chords decided again with the notes played (strong evidence for the chord),
+ * and the notes themselves. */
+export function withNotes(pass: Omit<ChordPass, "result">, notes: Note[], probs: ArrayLike<number> | null, opts: DecodeOptions = DEFAULT_DECODE): Analysis {
+  const ev = noteChordScores(notes, pass.frames.times, NOTE_CHORDS);
+  const result = decode({ ...pass.frames, logp: pass.frames.logp.map((v, i) => v + ev[i]) }, pass.rhythm, pass.duration, opts);
+  result.notes = noteRows(notes, probs);
+  return result;
+}
+
 export async function analyze(
   y: Float32Array,
   basis: CqtBasis,
@@ -74,30 +105,12 @@ export async function analyze(
   opts: DecodeOptions = DEFAULT_DECODE,
   transcribe?: Transcribe,
   runStrings?: RunStrings,
-  /** called with the chords before the (much slower) note transcription starts */
-  onChords?: (a: Analysis) => void,
 ): Promise<Analysis> {
-  const frames = await chordFrames(y, basis, meta, run, onProgress, TTA_SHIFTS);
-  onProgress?.("beats", 0.5);
-  const r = rhythm(y);
-  onProgress?.("beats", 1);
-  let result = decode(frames, r, y.length / SR, opts);
-  onChords?.(result);
-  if (transcribe) {
-    // the string model listens to the same audio the notes were heard in
-    const { notes, audio } = await transcribe(y, (p) => onProgress?.("notes", p));
-    // the notes played are strong evidence for the chord: decode again with them
-    const ev = noteChordScores(notes, frames.times, NOTE_CHORDS);
-    result = decode({ ...frames, logp: frames.logp.map((v, i) => v + ev[i]) }, r, y.length / SR, opts);
-    const probs = runStrings ? await stringProbs(audio, notes, runStrings) : null;
-    const r2 = (x: number) => Math.round(x * 100) / 100;
-    result.notes = notes.map((n, i): NoteRow => {
-      const row: NoteRow = [round(n.start), round(n.end), n.midi, r2(n.amp)];
-      if (probs) for (let s = 0; s < 6; s++) row.push(r2(probs[i * 6 + s]));
-      return row;
-    });
-  }
-  return result;
+  const pass = await analyzeChords(y, basis, meta, run, onProgress, opts);
+  if (!transcribe) return pass.result;
+  // the string model listens to the same audio the notes were heard in
+  const { notes, audio } = await transcribe(y, (p) => onProgress?.("notes", p));
+  return withNotes(pass, notes, runStrings ? await stringProbs(audio, notes, runStrings) : null, opts);
 }
 
 export type ChordFrames = {

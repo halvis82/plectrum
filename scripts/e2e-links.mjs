@@ -23,8 +23,9 @@ for (const link of links) {
       continue;
     }
     const secs = ((Date.now() - t0) / 1000).toFixed(0);
-    // the tab streams in after the song opens
-    await page.waitForSelector('[role="img"][aria-label^="Bar"]', { timeout: 300000 });
+    // the tab streams in after the song opens; wait for the finished one
+    await page.waitForFunction(() => !/Catching every note|Loading the models|tab ready up to|Paused while/.test(document.querySelector("[data-pane]")?.textContent ?? ""), null, { timeout: 300000 });
+    await page.waitForSelector('[role="img"][aria-label^="Bar"]', { timeout: 30000 });
     const bars = await page.locator('[role="img"][aria-label^="Bar"]').count();
     const title = await page.locator("h1").first().textContent();
     await page.waitForSelector("audio", { timeout: 60000 }).catch(() => {});

@@ -84,7 +84,9 @@ async function tabNotes(page) {
     return { bars: labels.length, notes: labels.join(" ").match(/fret \d+/g)?.length ?? 0 };
   };
   const t0 = Date.now();
-  const live = await count(300000);
+  // the tab streams in; wait for the finished one
+  await page.waitForFunction(() => !/Catching every note|Loading the models|tab ready up to|Paused while/.test(document.querySelector("[data-pane]")?.textContent ?? ""), null, { timeout: 300000 });
+  const live = await count(20000);
   const secs = (Date.now() - t0) / 1000;
   if (!live.notes) throw new Error("tab has no notes");
   await page.waitForTimeout(3000);

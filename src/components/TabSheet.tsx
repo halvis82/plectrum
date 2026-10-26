@@ -19,6 +19,7 @@ export function TabSheet({
   transpose,
   capo,
   tuning: openStrings,
+  upTo,
   now,
   follow,
   onSeek,
@@ -30,6 +31,8 @@ export function TabSheet({
   capo: number;
   /** open-string pitches, low first */
   tuning: readonly number[];
+  /** while the tab is still coming in: seconds it covers so far */
+  upTo?: number;
   now: (() => number) | null;
   follow: boolean;
   onSeek?: (t: number) => void;
@@ -91,7 +94,7 @@ export function TabSheet({
 
   if (!a.notes)
     return <p className="mt-6 text-sm text-muted">There&apos;s no tab for this one yet: it was caught before tabs existed, or its page was closed before every note was in. Catch it again to get the note-by-note tab.</p>;
-  if (!tab.length) return <p className="mt-6 text-sm text-muted">No guitar-range notes were heard in this recording.</p>;
+  if (!tab.length && upTo === undefined) return <p className="mt-6 text-sm text-muted">No guitar-range notes were heard in this recording.</p>;
 
   return (
     <div className="mt-5">
@@ -102,7 +105,7 @@ export function TabSheet({
         {spans.map((s, i) => {
           const chordAt = s.bar.beats.map((b, k) => ({ b, k, name: names(a.chords[b]) }));
           return (
-            <div key={i} className="rounded-xl bg-surface border border-line px-3 pt-1.5 pb-2">
+            <div key={i} className={`rounded-xl bg-surface border border-line px-3 pt-1.5 pb-2 ${upTo !== undefined && s.to > upTo ? "opacity-40" : ""}`}>
               <div className="flex text-[11px] text-muted h-5 items-center gap-2">
                 <span className="tabular-nums w-6">{s.bar.pickup ? "" : s.bar.index}</span>
                 <div className="relative flex-1 h-full">

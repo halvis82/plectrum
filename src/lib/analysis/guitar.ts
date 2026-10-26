@@ -91,8 +91,15 @@ export function halfToFloat(h: Uint16Array): Float32Array {
  * players and mixes (notes F1 89.2 comp, 91.4 solo, 86.0 mix with either) at 45% less compute. */
 export const DEFAULT_MARGIN = 50;
 
-/** 16 kHz audio -> frame activations at 100 fps, from overlapping 10 s segments. */
-export async function guitarActivations(y: Float32Array, run: RunGuitar, onProgress?: (p: number) => void, batch = 1, margin = DEFAULT_MARGIN): Promise<GuitarActivations> {
+/** 16 kHz audio -> frame activations at 100 fps, from overlapping 10 s segments. `onProgress` also
+ * gets the activations so far, for showing notes before the whole signal is done. */
+export async function guitarActivations(
+  y: Float32Array,
+  run: RunGuitar,
+  onProgress?: (p: number, sofar: GuitarActivations) => void | Promise<void>,
+  batch = 1,
+  margin = DEFAULT_MARGIN,
+): Promise<GuitarActivations> {
   const step = (SEG_FRAMES - 2 * margin) * 160; // samples between segment starts
   const nSeg = y.length <= SEGMENT ? 1 : Math.ceil((y.length - SEGMENT) / step) + 1;
   const padded = new Float32Array((nSeg - 1) * step + SEGMENT);
@@ -116,7 +123,7 @@ export async function guitarActivations(y: Float32Array, run: RunGuitar, onProgr
       }
       row += to - from;
     }
-    onProgress?.(Math.min(1, (s + n) / nSeg));
+    await onProgress?.(Math.min(1, (s + n) / nSeg), { ...acts, frames: row });
   }
   return { ...acts, frames: row };
 }
