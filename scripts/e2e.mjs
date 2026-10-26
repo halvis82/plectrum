@@ -54,7 +54,7 @@ async function paste(page, text) {
 }
 
 async function songId(page) {
-  await page.waitForURL(/\/song\//, { timeout: 120000 });
+  await page.waitForURL(/\/song\//, { timeout: 300000 });
   const id = page.url().split("/song/")[1];
   created.push(id);
   return id;

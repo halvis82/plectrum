@@ -48,3 +48,6 @@ skills-lock.json
 # python (api/ytdlp.py)
 .venv
 __pycache__
+
+# onnxruntime-web runtime, copied at build time (scripts/copy-ort.mjs)
+/public/ort

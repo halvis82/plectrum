@@ -2,7 +2,8 @@
 node_modules
 .agents
 .claude
-scripts
+scripts/*
+!scripts/copy-ort.mjs
 *.tsbuildinfo
 .venv
 __pycache__

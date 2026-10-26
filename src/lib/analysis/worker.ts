@@ -24,7 +24,8 @@ export type WorkerMessage =
   | { id: number; type: "loaded" }
   | { id: number; type: "error"; message: string };
 
-ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ort.env.versions.web}/dist/`;
+// served from this site by scripts/copy-ort.mjs
+ort.env.wasm.wasmPaths = `/ort/${ort.env.versions.web}/`;
 // threads need cross-origin isolation (COOP/COEP headers, see next.config.ts)
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
 
