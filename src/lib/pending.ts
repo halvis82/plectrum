@@ -4,9 +4,10 @@
 // here and the finished notes are saved to the song.
 
 import { useSyncExternalStore } from "react";
-import type { NoteRow } from "./analysis/analyze";
+import type { Analysis } from "./analysis/analyze";
 
-export type PendingNotes = { label: string; p: number | undefined; notes?: NoteRow[]; error?: string };
+/** `analysis`: the finished one, notes and the chords decided with them */
+export type PendingNotes = { label: string; p: number | undefined; analysis?: Analysis; error?: string };
 
 const jobs = new Map<string, PendingNotes>();
 const listeners = new Set<() => void>();
@@ -20,7 +21,7 @@ export function setPending(id: string, patch: Partial<PendingNotes>) {
 // closing the page would lose a tab that's still being worked out, so the browser asks first
 if (typeof window !== "undefined")
   window.addEventListener("beforeunload", (e) => {
-    if ([...jobs.values()].some((j) => !j.notes && !j.error)) e.preventDefault();
+    if ([...jobs.values()].some((j) => !j.analysis && !j.error)) e.preventDefault();
   });
 
 export function usePendingNotes(id: string): PendingNotes | null {

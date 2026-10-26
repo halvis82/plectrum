@@ -4,6 +4,7 @@ import { estimateTempo, onsetEnvelope, trackBeats } from "./beats";
 import { FRAMES_PER_CHUNK, N_BINS, SR, frameTimes, logCqt, type CqtBasis } from "./cqt";
 import { N_CLASSES, beatChords, toSegments, viterbi, type Segment } from "./decode";
 import type { Note } from "./notes";
+import { DEFAULT_NOTE_CHORDS, noteChordScores } from "./notechords";
 import { stringProbs, type RunStrings } from "./strings";
 
 /** Decoding knobs (tuned on GuitarSet, see scripts/guitarset-tune.mts). */
@@ -28,6 +29,10 @@ export const DEFAULT_DECODE: DecodeOptions = {
   halfBarPenalty: 1,
   offbeatPenalty: 1.5,
 };
+
+/** Note evidence weight, tuned on GuitarSet players 00-02 (scripts/notechords-tune.mts). On held-out
+ * players 03-05: root 72.9 -> 74.1, sevenths against the chords actually played 57.4 -> 66.4. */
+export const NOTE_CHORDS = { ...DEFAULT_NOTE_CHORDS, weight: 4 };
 
 /** Test-time pitch shifts (semitones). +-1 gained ~1.3 points on held-out GuitarSet players; +-2 added nothing. */
 export const TTA_SHIFTS = [-1, 0, 1];
@@ -55,8 +60,8 @@ export type Analysis = {
 
 export type NoteRow = [number, number, number, number, ...number[]];
 
-/** Note transcription for the whole signal (22.05 kHz mono). */
-export type Transcribe = (y: Float32Array, onProgress: (p: number) => void) => Promise<Note[]>;
+/** Note transcription for the whole signal (22.05 kHz mono), and the audio the notes were heard in. */
+export type Transcribe = (y: Float32Array, onProgress: (p: number) => void) => Promise<{ notes: Note[]; audio: Float32Array }>;
 
 export type Progress = (stage: "features" | "chords" | "beats" | "notes", p: number) => void;
 
@@ -76,11 +81,15 @@ export async function analyze(
   onProgress?.("beats", 0.5);
   const r = rhythm(y);
   onProgress?.("beats", 1);
-  const result = decode(frames, r, y.length / SR, opts);
+  let result = decode(frames, r, y.length / SR, opts);
   onChords?.(result);
   if (transcribe) {
-    const notes = await transcribe(y, (p) => onProgress?.("notes", p));
-    const probs = runStrings ? await stringProbs(y, notes, runStrings) : null;
+    // the string model listens to the same audio the notes were heard in
+    const { notes, audio } = await transcribe(y, (p) => onProgress?.("notes", p));
+    // the notes played are strong evidence for the chord: decode again with them
+    const ev = noteChordScores(notes, frames.times, NOTE_CHORDS);
+    result = decode({ ...frames, logp: frames.logp.map((v, i) => v + ev[i]) }, r, y.length / SR, opts);
+    const probs = runStrings ? await stringProbs(audio, notes, runStrings) : null;
     const r2 = (x: number) => Math.round(x * 100) / 100;
     result.notes = notes.map((n, i): NoteRow => {
       const row: NoteRow = [round(n.start), round(n.end), n.midi, r2(n.amp)];

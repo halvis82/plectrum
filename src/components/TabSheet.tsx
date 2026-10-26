@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
 import type { buildBars } from "@/lib/sheet";
+import { followInPane } from "@/lib/follow";
 import { stringNames, toTab, type TabNote } from "@/lib/tab";
 
 const LINE = 15; // px between strings
@@ -73,7 +74,8 @@ export function TabSheet({
       if (i !== lastBar.current) {
         const old = heads.current[lastBar.current];
         if (old) old.style.display = "none";
-        if (i >= 0 && follow) boxes.current[i]?.scrollIntoView({ block: "center", behavior: "smooth" });
+        const box = boxes.current[i];
+        if (i >= 0 && follow && box) followInPane(box);
         lastBar.current = i;
       }
       const el = i >= 0 ? heads.current[i] : null;

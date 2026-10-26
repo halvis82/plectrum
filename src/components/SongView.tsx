@@ -19,6 +19,7 @@ import { ChordDiagram } from "./ChordDiagram";
 import { TabSheet } from "./TabSheet";
 import { TUNINGS, detectTuning, type TuningId } from "@/lib/tab";
 import { usePendingNotes } from "@/lib/pending";
+import { followInPane, touchPane } from "@/lib/follow";
 
 export type SongData = {
   id: string;
@@ -34,7 +35,8 @@ export type SongData = {
 type Clock = { now: () => number; seek: (t: number) => void; play: () => void; pause: () => void };
 
 function usePrefs(id: string) {
-  const storageKey = `cc:view:${id}`;
+  // v2: the capo now starts at none, so frets read as played
+  const storageKey = `cc:view2:${id}`;
   // capo null = auto: follow the easiest capo for the current transposition
   // tuning null = auto (detected from the notes)
   const [view, setView] = useState<
@@ -57,8 +59,7 @@ function usePrefs(id: string) {
 export function SongView({ song }: { song: SongData }) {
   // a song just made here: its notes may still be on their way
   const pending = usePendingNotes(song.id);
-  const pendingNotes = pending?.notes;
-  const a = useMemo(() => (pendingNotes ? { ...song.analysis, notes: pendingNotes } : song.analysis), [song.analysis, pendingNotes]);
+  const a = pending?.analysis ?? song.analysis;
   const notesComing = !a.notes && !!pending && !pending.error;
   const stats = useMemo(() => songStats(a), [a]);
   const bars = useMemo(() => buildBars(a), [a]);
@@ -69,7 +70,7 @@ export function SongView({ song }: { song: SongData }) {
     try {
       saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
     } catch {}
-    setView(saved ?? { transpose: 0, capo: null, simplify: "full", mode: a.notes || notesComing ? "tab" : "bars", follow: true, lyricOffset: 0 });
+    setView(saved ?? { transpose: 0, capo: 0, simplify: "triads", mode: a.notes || notesComing ? "tab" : "bars", follow: true, lyricOffset: 0 });
   }, [storageKey, setView, a.notes, notesComing]);
 
   // ---- playback ----
@@ -202,7 +203,7 @@ export function SongView({ song }: { song: SongData }) {
       )}
 
       {/* controls */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-2.5 bg-bg/90 backdrop-blur border-b border-line flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+      <div data-controls className="sticky top-0 z-10 -mx-4 px-4 py-2.5 bg-bg/90 backdrop-blur border-b border-line flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         {clock && (
           <button
             onClick={() => (playing ? clock.pause() : play())}
@@ -297,50 +298,52 @@ export function SongView({ song }: { song: SongData }) {
           ))}
         </p>
       )}
-      {pending?.error && <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{pending.error}</p>}
-      {view.mode === "tab" && notesComing ? (
-        <>
-          <div className="mt-6 rounded-2xl border border-line bg-surface p-5">
-            <p className="text-sm">{pending.label}… the tab replaces the chord sheet below when every note is in.</p>
-            <div className="mt-3 h-1.5 rounded-full bg-surface-2 overflow-hidden">
-              <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
+      <div data-pane onWheel={touchPane} onTouchMove={touchPane} className="mt-4 max-h-[78dvh] overflow-y-auto overscroll-contain rounded-2xl border border-line px-3 pb-4 -mx-1">
+        {pending?.error && <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{pending.error}</p>}
+        {view.mode === "tab" && notesComing ? (
+          <>
+            <div className="mt-6 rounded-2xl border border-line bg-surface p-5">
+              <p className="text-sm">{pending.label}… the tab replaces the chord sheet below when every note is in.</p>
+              <div className="mt-3 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(3, (pending.p ?? 0) * 100)}%` }} />
+              </div>
             </div>
-          </div>
+            <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
+          </>
+        ) : view.mode === "tab" ? (
+          <TabSheet
+            a={a}
+            bars={bars}
+            names={names}
+            transpose={view.transpose}
+            capo={capo}
+            tuning={tuning.strings}
+            now={clock?.now ?? null}
+            follow={view.follow && playing}
+            onSeek={
+              clock
+                ? (t) => {
+                    clock.seek(Math.max(0, t - 0.02));
+                    clock.play();
+                  }
+                : undefined
+            }
+          />
+        ) : view.mode === "bars" ? (
           <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
-        </>
-      ) : view.mode === "tab" ? (
-        <TabSheet
-          a={a}
-          bars={bars}
-          names={names}
-          transpose={view.transpose}
-          capo={capo}
-          tuning={tuning.strings}
-          now={clock?.now ?? null}
-          follow={view.follow && playing}
-          onSeek={
-            clock
-              ? (t) => {
-                  clock.seek(Math.max(0, t - 0.02));
-                  clock.play();
-                }
-              : undefined
-          }
-        />
-      ) : view.mode === "bars" ? (
-        <BarsSheet bars={bars} a={a} names={names} beat={beat} follow={view.follow && playing} onSeek={clock ? seekBeat : undefined} />
-      ) : (
-        <LyricsSheet
-          lyrics={lyrics}
-          a={a}
-          names={names}
-          beat={beat}
-          follow={view.follow && playing}
-          offset={view.lyricOffset}
-          setOffset={(o) => update({ lyricOffset: o })}
-          onSeek={clock ? seekBeat : undefined}
-        />
-      )}
+        ) : (
+          <LyricsSheet
+            lyrics={lyrics}
+            a={a}
+            names={names}
+            beat={beat}
+            follow={view.follow && playing}
+            offset={view.lyricOffset}
+            setOffset={(o) => update({ lyricOffset: o })}
+            onSeek={clock ? seekBeat : undefined}
+          />
+        )}
+      </div>
 
       <label className="mt-6 flex items-center gap-2 text-sm text-muted">
         <input type="checkbox" checked={view.follow} onChange={(e) => update({ follow: e.target.checked })} />
@@ -368,7 +371,7 @@ function BarsSheet({
   const current = useRef<HTMLButtonElement>(null);
   const curBar = bars.findIndex((b) => b.beats.includes(beat));
   useEffect(() => {
-    if (follow && current.current) current.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (follow && current.current) followInPane(current.current);
   }, [curBar, follow]);
 
   const rows = useMemo(
@@ -442,7 +445,7 @@ function LyricsSheet({
   const curLine = lines ? lines.findLastIndex((l) => l.t + offset <= t) : -1;
   const allPieces = lines?.map((line, li) => chordsOverLine(line, lines[li + 1]?.t ?? line.t + 6, a, names, offset));
   useEffect(() => {
-    if (follow && current.current) current.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (follow && current.current) followInPane(current.current);
   }, [curLine, follow]);
 
   if (lyrics === "loading") return <p className="mt-6 text-muted text-sm">Looking for lyrics…</p>;

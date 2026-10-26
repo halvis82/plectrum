@@ -269,12 +269,13 @@ export function Catcher() {
         const id: string = (songId = body.id);
         setPending(id, notesProgress);
         void full
-          .then(async ({ notes }) => {
-            setPending(id, { notes });
+          .then(async (done) => {
+            setPending(id, { analysis: done });
+            const { notes, chords, segments, meter, downbeat } = done;
             const saved = await fetch(`/api/songs/${id}`, {
               method: "PATCH",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ editKey: body.editKey, notes }),
+              body: JSON.stringify({ editKey: body.editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
             }).catch(() => null);
             if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved, so it only shows on this device until you reload." });
           })

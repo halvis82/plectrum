@@ -3,8 +3,8 @@ import { validAnalysis } from "@/lib/analysis/validate";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : undefined);
 
-/** Anyone can rename a song (public library). The browser that made a song adds its notes once,
- * with the edit key it got when saving the chords. */
+/** Anyone can rename a song (public library). The browser that made a song adds its notes (and the
+ * chords decided with them) once, with the edit key it got when saving the first chords. */
 export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) {
   const { id } = await ctx.params;
   const raw = await req.text();
@@ -15,14 +15,17 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) 
   } catch {
     return Response.json({ error: "Bad JSON" }, { status: 400 });
   }
-  if (body.notes !== undefined) {
+  if (body.analysis !== undefined) {
     if (typeof body.editKey !== "string" || !body.editKey) return Response.json({ error: "Forbidden" }, { status: 403 });
     const [song] = (await sql`select analysis from songs
-      where id = ${id} and edit_key = ${body.editKey} and created_at > now() - interval '1 hour'`) as { analysis: unknown }[];
+      where id = ${id} and edit_key = ${body.editKey} and created_at > now() - interval '1 hour'`) as { analysis: Record<string, unknown> }[];
     if (!song) return Response.json({ error: "Forbidden" }, { status: 403 });
-    const analysis = { ...(song.analysis as object), notes: body.notes };
-    if (!validAnalysis(analysis)) return Response.json({ error: "Invalid notes" }, { status: 400 });
-    await sql`update songs set analysis = ${JSON.stringify(analysis)}, edit_key = null, updated_at = now() where id = ${id}`;
+    // the notes, and the chords decided again with them; timing (beats, duration) stays as saved
+    const u = (body.analysis ?? {}) as Record<string, unknown>;
+    const analysis = { ...song.analysis, notes: u.notes, chords: u.chords, segments: u.segments, meter: u.meter, downbeat: u.downbeat };
+    if (!validAnalysis(analysis)) return Response.json({ error: "Invalid analysis" }, { status: 400 });
+    const songKey = typeof body.key === "string" ? body.key.slice(0, 20) : null;
+    await sql`update songs set analysis = ${JSON.stringify(analysis)}, song_key = coalesce(${songKey}, song_key), edit_key = null, updated_at = now() where id = ${id}`;
     return new Response(null, { status: 204 });
   }
   const title = str(body.title, 200);

@@ -47,6 +47,10 @@ Besides chords, every song gets a note-by-note tab: string, fret and timing for 
 
 A new song opens as soon as its chords are in (a few seconds), and its tab fills in on the song page while the notes are transcribed; the browser then saves them to the song with a one-time edit key. A link that is already in the library opens the saved song instead of being analyzed again.
 
+Once the notes are in, the chords are decided again with them: each frame's chord scores get a bonus for the pitch classes actually ringing, a penalty for notes outside the chord and for chord tones never played, and a bass bonus (`src/lib/analysis/notechords.ts`, weight tuned on players 00-02 with `scripts/notechords-tune.mts`). On held-out players 03-05 the root accuracy goes from 72.9 to 74.1 and sevenths, scored against the chords actually played, from 57.4 to 66.4. Only 37% of the 7th chords shown were real before, so the sheet now shows basic chords by default (All and 7ths are one tap away).
+
+The string model is also trained on GuitarSet re-recorded through simulated laptop and phone mics (band-limited, room reverb, noise, limiting). On held-out players through a phone-like mic, the right string goes from 76.5% to 80.1% on solos and 86.0% to 87.8% on comping, with clean recordings unchanged (89.7% solo, 92.9% comping).
+
 Notes are stored with the song (`analysis.notes`, with each note's string probabilities), so the tab is recomputed instantly when transpose, capo or tuning change.
 
 ### Tab accuracy (GuitarSet)
@@ -82,6 +86,7 @@ All 180 comping excerpts of [GuitarSet](https://zenodo.org/records/3371780) (CC 
 | tuning half | 87.9 | 82.6 | 74.7 | 79.7 |
 | held-out half | 72.5 | 71.4 | 62.7 | 70.8 |
 | held-out, before tuning | 70.4 | 69.5 | 60.9 | 69.0 |
+| held-out, with note evidence | 74.1 | 71.9 | 59.1 | 72.7 |
 
 What helped: pitch-shift test-time augmentation (the model also hears the audio +-1 semitone and the predictions are rotated back and averaged), a "no chord" penalty that stops muted strumming from reading as silence (gated off for genuinely quiet audio), and lighter change penalties. Singer-songwriter and rock styles score highest; funk and jazz voicings are hardest.
 

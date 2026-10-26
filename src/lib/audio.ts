@@ -25,6 +25,9 @@ export async function decodeToMono(data: Blob | ArrayBuffer): Promise<Float32Arr
   }
 }
 
+/** a worker request without its id (Omit applied to each variant of the union) */
+type RequestBody = WorkerRequest extends infer R ? (R extends WorkerRequest ? Omit<R, "id"> : never) : never;
+
 export type Stage = "model" | "features" | "chords" | "beats" | "notes";
 
 /** A long-lived analysis worker. The chord model starts loading as soon as it is created; the much
@@ -40,7 +43,7 @@ export class Analyzer {
     this.ready = this.call({ type: "load" }, () => {}).then(() => undefined);
   }
 
-  private call(req: Omit<WorkerRequest, "id"> & { samples?: Float32Array }, onMsg: (m: WorkerMessage) => void): Promise<WorkerMessage> {
+  private call(req: RequestBody, onMsg: (m: WorkerMessage) => void): Promise<WorkerMessage> {
     const id = this.next++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, (m) => {
@@ -49,7 +52,7 @@ export class Analyzer {
         if (m.type === "error") reject(new Error(m.message));
         else resolve(m);
       });
-      this.worker.postMessage({ ...req, id } as WorkerRequest, req.samples ? [req.samples.buffer] : []);
+      this.worker.postMessage({ ...req, id } as WorkerRequest, "samples" in req ? [req.samples.buffer] : []);
     });
   }
 

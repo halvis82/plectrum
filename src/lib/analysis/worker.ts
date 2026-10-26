@@ -34,11 +34,13 @@ ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardw
 const GUITAR_MODEL = "/model/guitar.v1.onnx";
 const GUITAR_WEIGHTS = "/model/guitar.v1.f16";
 
+
 let chords: Promise<{ session: ort.InferenceSession; strings: ort.InferenceSession; basis: CqtBasis; meta: ModelMeta }> | null = null;
 let chordsReady = false;
 let guitar: Promise<ort.InferenceSession> | null = null;
 /** download progress of the note model's weights, 0..1 */
 let guitarLoaded = 0;
+
 
 function loadChords() {
   chords ??= (async () => {
@@ -147,7 +149,7 @@ async function handle(req: WorkerRequest) {
           velocity: out.velocity.data as Float32Array,
         };
       };
-      return decodeGuitarNotes(await guitarActivations(resampleTo(y, SR, GUITAR_SR), runGuitar, onProgress));
+      return { notes: decodeGuitarNotes(await guitarActivations(resampleTo(y, SR, GUITAR_SR), runGuitar, onProgress)), audio: y };
     };
     const runStrings = async (patches: Float32Array, midi: Float32Array, n: number) => {
       const out = await strings.run({ patch: new ort.Tensor("float32", patches, [n, NF, NB]), midi: new ort.Tensor("float32", midi, [n]) });
