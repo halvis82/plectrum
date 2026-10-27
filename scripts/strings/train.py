@@ -1,6 +1,7 @@
 """Trains the string classifier: pitch-aligned spectral patch + pitch -> which of the 6 strings.
 Usage: python train.py <out.pt> <epochs> <dataset spec>... [--all]
-  spec: <guitarset.npz>:<train players, e.g. 012> or <egdb.npz>:egdb (clips below 216 train)"""
+  spec: <guitarset.npz>:<train players, e.g. 012>, <egdb.npz>:egdb (clips below 216 train), or
+        <build_refs.npz>:players=<ids to train on> (the other ids are held out)"""
 
 import sys
 
@@ -43,7 +44,13 @@ def load(spec):
     path, split = spec.rsplit(":", 1)
     ds = np.load(path)
     s, midi, player = ds["s"].astype(np.int64), ds["midi"].astype(np.float32), ds["player"].astype(np.int64)
-    if split == "egdb":
+    if split.startswith("players="):
+        # any set from build_refs.py: train on the listed player ids, test on the rest
+        copies = 3
+        ids = [int(x) for x in split[len("players="):].split(",") if x]
+        tr = np.isin(player, ids)
+        group = np.array([f"{path.split('/')[-1].split('.')[0]}-{p}" for p in player])
+    elif split == "egdb":
         copies = 2
         tr = player < 216
         group = np.where(ds["solo"] == 0, "egdb-DI", np.where(ds["solo"] == 1, "egdb-Marshall", np.where(ds["solo"] == 2, "egdb-Plexi", "egdb-other")))
@@ -52,7 +59,11 @@ def load(spec):
         tr = np.isin(player, [int(c) for c in split])
         group = np.where(ds["solo"] == 1, "gs-solo", "gs-comp")
     first = np.arange(len(s)) % copies == 0
-    return ds["X"], s, midi, tr, ~tr & first, group
+    # the hexaphonic pickup sometimes reports a pitch its string can't play (about 1% in Guitar-TECHS);
+    # those labels would get the model's -1e4 logit and swamp the loss
+    fret = midi - TUNING.numpy()[s]
+    ok = (fret >= 0) & (fret <= MAX_FRET)
+    return ds["X"], s, midi, tr & ok, ~tr & first & ok, group
 
 
 def main():

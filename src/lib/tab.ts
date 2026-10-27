@@ -56,22 +56,22 @@ export type TabOptions = {
   beam: number;
 };
 
-/** Fitted on GuitarSet players 00-02 with open strings kept cost-neutral (scripts/tab-sweep.mts); `audio`
- * chosen on the same players with a string model that never saw them. */
+/** Fitted on the app's own detected notes from Guitar-TECHS players 1-2 and GuitarSet players 00-02,
+ * each scored with a string model that never heard those players (scripts/eval/tab-fit.mts). */
 export const DEFAULT_TAB: TabOptions = {
   maxFret: 20,
   chordWindow: 0.05,
-  span: 1.988,
-  stretch: 4,
-  height: 0.004,
-  high: 0.453,
-  move: 1.155,
+  span: 0.746,
+  stretch: 5.32,
+  height: 0.002,
+  high: 0.042,
+  move: 1.536,
   shift: 2.453,
-  moveRelax: 1.834,
-  cut: 3.431,
-  fretted: 0.016,
-  shape: 0.231,
-  shapeLink: 3,
+  moveRelax: 1.829,
+  cut: 9.126,
+  fretted: 0.021,
+  shape: 0.307,
+  shapeLink: 0.75,
   audio: 0.7,
   beam: 64,
 };

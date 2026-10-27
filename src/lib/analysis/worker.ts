@@ -69,7 +69,7 @@ function loadGuitar() {
     const [graph, half, stringsModel] = await Promise.all([
       fetch(GUITAR_MODEL).then((r) => r.arrayBuffer()),
       download(GUITAR_WEIGHTS, (p) => (guitarLoaded = p)),
-      fetch("/model/strings.v1.onnx").then((r) => r.arrayBuffer()),
+      fetch("/model/strings.v2.onnx").then((r) => r.arrayBuffer()),
     ]);
     const strings = await ort.InferenceSession.create(stringsModel, { executionProviders: ["wasm"] });
     // weights ship as float16 and run as float32
