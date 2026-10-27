@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
 import { SR, decodeToMono, getMicStream, saveLocalAudio, sharedAnalyzer, type Stage } from "@/lib/audio";
-import { setPending } from "@/lib/pending";
+import { pendingSnapshot, setPending } from "@/lib/pending";
+import { customAlphabet } from "nanoid";
+import type { SongData } from "@/components/song/SongView";
 import { PcmCapture, encodeWav, resample } from "@/lib/capture";
 import { chordName, detectKey, keyName, labelFromIndex, parseLabel, spellingFor } from "@/lib/music";
 import { songStats } from "@/lib/sheet";
@@ -65,6 +67,41 @@ const LINK_RE = /^\s*https?:\/\/[^\s/]+\.[^\s]+/i;
 const SITE_NAME: Record<string, string> = { soundcloud: "SoundCloud", bandcamp: "Bandcamp", archiveorg: "the Internet Archive" };
 /** yt-dlp extractor names -> stored source ("generic" is a plain file link) */
 const sourceOf = (site: string) => (site === "generic" ? "web" : site.replace(/[^a-z0-9]/g, "").slice(0, 24) || "web");
+
+const newSongId = customAlphabet("23456789abcdefghjkmnpqrstuvwxyz", 10);
+
+/** Saves a new song to the library, trying for about two minutes; resolves with the key that lets this
+ * device add the tab, or null when it couldn't be saved (the song page then offers to try again). */
+async function saveSong(id: string, body: string): Promise<string | null> {
+  for (let k = 0; k < 6; k++) {
+    if (k) await new Promise((r) => setTimeout(r, Math.min(30_000, 1500 * 2 ** k)));
+    try {
+      const res = await fetch("/api/songs", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(30_000) });
+      const out = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setPending(id, { save: { state: "saved" } });
+        return out.editKey ?? null;
+      }
+      // the request itself is wrong: retrying won't help
+      if (res.status < 500) break;
+    } catch {}
+  }
+  logEvent("save-fail", {});
+  setPending(id, {
+    save: {
+      state: "error",
+      // by now the tab may be done too: save everything this device has
+      retry: () => {
+        setPending(id, { save: { state: "saving" } });
+        const job = pendingSnapshot(id);
+        const analysis = job?.analysis ?? job?.local?.analysis;
+        const b = JSON.parse(body);
+        void saveSong(id, JSON.stringify({ ...b, analysis: analysis ?? b.analysis }));
+      },
+    },
+  });
+  return null;
+}
 
 /** when each song's tab started, for the diagnostics log */
 const tabWatch = new Map<string, number>();
@@ -363,21 +400,34 @@ export function Catcher() {
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       if (samples.length < SR * 3 || peak < 0.003) throw new Error("There wasn't enough music to work with. Give it at least a few seconds.");
       if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
-      // the song opens as soon as its chords are in; its page then shows the tab filling in
+      // the song opens as soon as its chords are in; its page then shows the tab filling in. The song's
+      // audio is in hand now, so the big note model can come down while the chords are worked out
       const an = getAnalyzer();
+      an.prefetch();
       const pass = await an.chords(samples, (stage, p) => stage !== "notes" && stage !== "paused" && step(flow, stage, p));
       const analysis = pass.result;
       step(flow, "save");
-      const res = await sturdyFetch(
-        "/api/songs",
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...meta, key: keyName(songStats(analysis).key), analysis }) },
-        { timeoutMs: 30_000, tries: 3 },
-      );
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Saving failed");
-      const id: string = body.id;
-      setPending(id, { label: STAGE_LABEL.notes, p: 0 });
-      an.prefetch();
+      // the song opens right away from what this device has; the library copy is saved alongside, with
+      // retries, so a slow or failing server never holds the result back
+      const id = newSongId();
+      const key = keyName(songStats(analysis).key);
+      const local: SongData = {
+        id,
+        title: meta.title,
+        artist: meta.artist,
+        source: meta.source,
+        source_url: meta.sourceUrl ?? null,
+        youtube_id: meta.youtubeId ?? null,
+        audio_url: meta.audioUrl ?? null,
+        analysis,
+        edits: null,
+        captions: null,
+        created_at: new Date().toISOString(),
+        updated_at: null,
+        views: 0,
+      };
+      setPending(id, { label: STAGE_LABEL.notes, p: 0, local, save: { state: "saving" } });
+      const saving = saveSong(id, JSON.stringify({ ...meta, id, key, analysis }));
       void an
         .tab(samples, pass, {
           // a paused tab keeps its progress bar where it was
@@ -387,17 +437,20 @@ export function Catcher() {
         .then(async (done) => {
           setPending(id, { analysis: done });
           logEvent("tab-ok", { secs: +((Date.now() - (tabWatch.get(id) ?? Date.now())) / 1000).toFixed(1), notes: done.notes?.length ?? 0 });
+          const editKey = await saving;
           const { notes, chords, segments, meter, downbeat } = done;
-          const saved = await sturdyFetch(
-            `/api/songs/${id}`,
-            {
-              method: "PATCH",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ editKey: body.editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
-            },
-            { timeoutMs: 60_000, tries: 4 },
-          ).catch(() => null);
-          if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved, so it only shows on this device until you reload." });
+          const saved = editKey
+            ? await sturdyFetch(
+                `/api/songs/${id}`,
+                {
+                  method: "PATCH",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
+                },
+                { timeoutMs: 60_000, tries: 4 },
+              ).catch(() => null)
+            : null;
+          if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved to the library, so it only shows on this device until you reload." });
         })
         .catch((e) => {
           logEvent("tab-fail", { error: String(e instanceof Error ? e.message : e).slice(0, 300) });

@@ -366,6 +366,23 @@ export function SongView({ song }: { song: SongData }) {
         />
       )}
 
+      {pending?.save && pending.save.state !== "saved" && (
+        <div className={`-mt-1 mb-3 text-sm rounded-xl px-3 py-2 flex flex-wrap items-center gap-2 ${pending.save.state === "error" ? "bg-accent-soft" : "bg-surface-2 text-muted"}`} aria-live="polite">
+          {pending.save.state === "saving" ? (
+            <>
+              <span className="h-2 w-2 rounded-full bg-accent animate-pulse" aria-hidden />
+              Saving to the library…
+            </>
+          ) : (
+            <>
+              <span className="flex-1">Not saved to the library yet: it&apos;s only on this device. Keep this page open and try again.</span>
+              <button onClick={pending.save.retry} className="btn btn-primary btn-sm">
+                Try again
+              </button>
+            </>
+          )}
+        </div>
+      )}
       <p className="text-sm text-muted -mt-2 mb-3">
         {a.chords.some((c) => c < 168) && (
           <>

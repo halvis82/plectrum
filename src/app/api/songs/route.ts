@@ -4,7 +4,10 @@ import { listSongs, sql } from "@/lib/server/db";
 import { validAnalysis } from "@/lib/analysis/validate";
 import { validEdits } from "@/lib/edits";
 
-const newId = customAlphabet("23456789abcdefghjkmnpqrstuvwxyz", 10);
+const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
+const newId = customAlphabet(ALPHABET, 10);
+/** the browser may pick the id, so the song's page can open before it is saved */
+const ID_RE = new RegExp(`^[${ALPHABET}]{10}$`);
 
 export async function GET(req: Request) {
   const q = new URL(req.url).searchParams.get("q") ?? undefined;
@@ -36,7 +39,10 @@ export async function POST(req: Request) {
   // a song started from scratch arrives with its tempo grid and an empty tab
   const edits = body.edits === undefined ? null : validEdits(body.edits) ? body.edits : undefined;
   if (edits === undefined) return Response.json({ error: "Invalid edits" }, { status: 400 });
-  const id = newId();
+  const id = typeof body.id === "string" && ID_RE.test(body.id) ? body.id : newId();
+  // the same browser retrying a save that already went through
+  const [had] = (await sql`select edit_key from songs where id = ${id}`) as { edit_key: string | null }[];
+  if (had) return Response.json({ id, editKey: had.edit_key });
   // songs arrive with their chords first; the browser that made one adds the notes with this key
   const editKey = a.notes ? null : randomBytes(18).toString("base64url");
   if (youtubeId || sourceUrl) {

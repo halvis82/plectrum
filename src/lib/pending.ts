@@ -5,10 +5,21 @@
 
 import { useSyncExternalStore } from "react";
 import type { Analysis, NoteRow } from "./analysis/analyze";
+import type { SongData } from "@/components/song/SongView";
 
 /** `partial`: the tab so far (notes starting before `upTo` seconds); `analysis`: the finished one,
  * notes and the chords decided with them */
-export type PendingNotes = { label: string; p: number | undefined; partial?: { notes: NoteRow[]; upTo: number }; analysis?: Analysis; error?: string };
+export type PendingNotes = {
+  label: string;
+  p: number | undefined;
+  partial?: { notes: NoteRow[]; upTo: number };
+  analysis?: Analysis;
+  error?: string;
+  /** the song as made on this device, shown before (or without) the library having it */
+  local?: SongData;
+  /** saving it to the library; `retry` tries again after a failure */
+  save?: { state: "saving" | "saved" | "error"; retry?: () => void };
+};
 
 const jobs = new Map<string, PendingNotes>();
 const listeners = new Set<() => void>();
@@ -22,7 +33,7 @@ export function setPending(id: string, patch: Partial<PendingNotes>) {
 // closing the page would lose a tab that's still being worked out, so the browser asks first
 if (typeof window !== "undefined")
   window.addEventListener("beforeunload", (e) => {
-    if ([...jobs.values()].some((j) => !j.analysis && !j.error)) e.preventDefault();
+    if ([...jobs.values()].some((j) => (!j.analysis && !j.error) || j.save?.state === "saving")) e.preventDefault();
   });
 
 export function usePendingNotes(id: string): PendingNotes | null {
@@ -32,3 +43,5 @@ export function usePendingNotes(id: string): PendingNotes | null {
     () => null,
   );
 }
+
+export const pendingSnapshot = (id: string) => jobs.get(id) ?? null;
