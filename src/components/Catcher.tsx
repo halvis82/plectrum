@@ -206,6 +206,8 @@ export function Catcher() {
 
       const ytImage = (id: string | null) => (id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : null);
       setSong({ title: resolved.title, artist: resolved.artist, image: ytImage(resolved.videoId) });
+      // the server takes a few seconds to find the audio stream before any of it arrives
+      step(F, "audio");
       let audio: Blob | null = null;
       let videoId = resolved.videoId;
       for (let attempt = 0; attempt < 4 && !audio; attempt++) {
