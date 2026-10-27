@@ -242,3 +242,33 @@ function streamAudio(src: AudioSource, from: number, to: number): ReadableStream
     },
   });
 }
+
+/** The video's caption track as WebVTT (hand-written ones first), from YouTube itself. Caption
+ * requests may need a PO token like streams do (yt-dlp's "subs" token, bound to the video). */
+export async function youtubeCaptionsVtt(videoId: string): Promise<{ vtt: string; lang: string | null } | null> {
+  const { yt: innertube, binding } = await yt();
+  for (const name of ["WEB", "MWEB", "TV"] as const) {
+    let tracks: { base_url: string; language_code: string; kind?: string }[] = [];
+    try {
+      const info = await innertube.getBasicInfo(videoId, { client: name });
+      tracks = (info.captions?.caption_tracks ?? []) as typeof tracks;
+    } catch {
+      continue;
+    }
+    if (!tracks.length) continue;
+    const track = tracks.find((t) => t.kind !== "asr") ?? tracks[0];
+    const base = `${track.base_url}&fmt=vtt`;
+    const candidates = [base];
+    const minter = await poMinter().catch(() => null);
+    for (const b of [videoId, binding]) {
+      const pot = b && minter ? await minter.mintAsWebsafeString(b).catch(() => null) : null;
+      if (pot) candidates.push(`${base}&pot=${encodeURIComponent(pot)}&c=${name}`);
+    }
+    for (const url of candidates) {
+      const r = await fetch(url, { headers: { "user-agent": CHROME_UA, referer: "https://www.youtube.com/" } }).catch(() => null);
+      const text = r?.ok ? await r.text() : "";
+      if (text.includes("-->")) return { vtt: text, lang: track.language_code ?? null };
+    }
+  }
+  return null;
+}

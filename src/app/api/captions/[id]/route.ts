@@ -1,11 +1,16 @@
 import { sql } from "@/lib/server/db";
-import { invidiousHosts } from "@/lib/server/youtube-audio";
+import { invidiousHosts, youtubeCaptionsVtt } from "@/lib/server/youtube-audio";
 import { parseVtt, validCaptions, type Captions } from "@/lib/captions";
 
 type Track = { label: string; language_code?: string; languageCode?: string; url: string };
 
-/** The video's own captions, through Invidious: hand-written ones first, auto-generated otherwise. */
+/** The video's own captions: from YouTube, else through Invidious; hand-written ones first. */
 async function youtubeCaptions(videoId: string): Promise<Captions | null> {
+  const direct = await youtubeCaptionsVtt(videoId).catch(() => null);
+  if (direct) {
+    const lines = parseVtt(direct.vtt);
+    if (lines.length) return { source: "youtube", lang: direct.lang, lines };
+  }
   for (const host of (await invidiousHosts()).slice(0, 4)) {
     try {
       const r = await fetch(`https://${host}/api/v1/captions/${videoId}`, { signal: AbortSignal.timeout(6000) });

@@ -27,8 +27,10 @@ export function parseVtt(vtt: string): CaptionLine[] {
     const ti = lines.findIndex((l) => l.includes("-->"));
     if (ti < 0) continue;
     const [a, b] = lines[ti].split("-->");
-    const text = lines
-      .slice(ti + 1)
+    let body = lines.slice(ti + 1);
+    // auto captions mark the words new in this cue with inline times; the other line repeats the last cue
+    if (body.some((l) => /<\d\d:\d\d/.test(l))) body = body.filter((l) => /<\d\d:\d\d/.test(l));
+    const text = body
       .join(" ")
       .replace(/<[^>]+>/g, "")
       .replace(/&amp;/g, "&")
@@ -47,7 +49,7 @@ export function parseVtt(vtt: string): CaptionLine[] {
       prev.end = Math.max(prev.end, l.end);
       continue;
     }
-    if (prev && l.text.startsWith(prev.text + " ") && l.t - prev.t < 0.05) {
+    if (prev && l.text.startsWith(prev.text + " ")) {
       clean.push({ ...l, text: l.text.slice(prev.text.length + 1) });
       continue;
     }
