@@ -126,7 +126,9 @@ export function SongView({ song }: { song: SongData }) {
     () => (tuningShift < 0 ? 0 : capoOptions(stats.items.map((i) => ({ chord: transpose(i.chord, transposeBy), dur: i.dur })))[0].capo),
     [stats, transposeBy, tuningShift],
   );
-  const capo = view?.capo ?? bestCapo;
+  // a capo named in the title ("capo 4", "cejilla 2") is the one the player used
+  const titleCapo = useMemo(() => capoInText(song.title), [song.title]);
+  const capo = view?.capo ?? (tuningShift < 0 ? null : titleCapo) ?? bestCapo;
   const tabCapo = written ? 0 : capo;
   const tabTranspose = written ? 0 : (view?.transpose ?? 0);
 
@@ -310,8 +312,11 @@ export function SongView({ song }: { song: SongData }) {
 
   // what the guitar plays: the tab as shown, or with no tab, the chords as shown, strummed on each beat
   const guitarNotes = useMemo((): SynthNote[] => {
-    if (sheetNotes.length)
-      return sheetNotes.map((n) => ({ t: n.start, end: Math.max(n.end, n.start + 0.12), midi: midiOf(n), string: n.string, gain: written ? 0.75 : 0.35 + 0.5 * Math.min(1, n.amp * 1.5), tech: n.tech }));
+    if (sheetNotes.length) {
+      const notes = sheetNotes.map((n) => ({ t: n.start, end: Math.max(n.end, n.start + 0.12), midi: midiOf(n), string: n.string, gain: written ? 0.75 : 0.35 + 0.5 * Math.min(1, n.amp * 1.5), tech: n.tech }));
+      // a tab written by hand sets its own lengths; the heard one rings on as a guitar does
+      return written ? notes : letRing(notes, sheetNotes.map((n) => n.fret));
+    }
     if (!shapeFn) return [];
     const out: SynthNote[] = [];
     a.beats.forEach((t, i) => {
@@ -517,7 +522,7 @@ export function SongView({ song }: { song: SongData }) {
             <label className="flex items-center gap-1.5">
               <span className="text-muted">Capo</span>
               <select value={view.capo ?? "auto"} onChange={(e) => update({ capo: e.target.value === "auto" ? null : Number(e.target.value) })} className="select">
-                <option value="auto">Easiest ({bestCapo === 0 ? "none" : bestCapo})</option>
+                <option value="auto">{titleCapo !== null && tuningShift >= 0 ? `From the title (${titleCapo})` : `Easiest (${bestCapo === 0 ? "none" : bestCapo})`}</option>
                 {Array.from({ length: 10 }, (_, c) => (
                   <option key={c} value={c}>
                     {c === 0 ? "None" : c}
@@ -775,6 +780,38 @@ function Segmented<T extends string>({ value, onChange, options }: { value: T; o
       ))}
     </div>
   );
+}
+
+/** The capo a title names, if any: "capo 4", "Capo on 2nd fret", "cejilla en 3". */
+function capoInText(text: string): number | null {
+  const m = text.match(/\b(?:capo|cejilla|capodastre|kapo)\s*(?:on|en|in|at|no|sur|na)?\s*(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  const n = m ? Number(m[1]) : NaN;
+  return n >= 1 && n <= 9 ? n : null;
+}
+
+/** How long notes heard in a song ring when the tab plays: the model's note ends are where the sound
+ * faded below its threshold, which cuts notes short. On a guitar a note rings until its string is played
+ * again, or, when fretted, until the hand moves away (a fretted note more than 3 frets off starts);
+ * open strings ring longest. `frets` goes with `notes`. */
+function letRing(notes: SynthNote[], frets: number[]): SynthNote[] {
+  const order = notes.map((_, i) => i).sort((a, b) => notes[a].t - notes[b].t);
+  const out = [...notes];
+  for (const [k, i] of order.entries()) {
+    const n = notes[i];
+    const fret = frets[i];
+    let until = n.t + (fret === 0 ? 4 : 2.5);
+    for (const j of order.slice(k + 1)) {
+      const m = notes[j];
+      if (m.t >= until) break;
+      if (m.t <= n.t + 0.004) continue;
+      if (m.string === n.string || (fret > 0 && frets[j] > 0 && Math.abs(frets[j] - fret) > 3)) {
+        until = m.t;
+        break;
+      }
+    }
+    out[i] = { ...n, end: Math.max(n.end, until) };
+  }
+  return out;
 }
 
 /** Notes struck together (a chord written on one beat) are strummed, low string first, the way a hand
