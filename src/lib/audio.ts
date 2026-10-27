@@ -37,7 +37,27 @@ export type Stage = "model" | "features" | "chords" | "beats" | "notes" | "pause
 
 /** One analysis worker (see analysis/worker.ts): requests are numbered and answered in order. A worker
  * that crashes (out of memory, say) fails its requests and is replaced on the next call. */
-const CRASHED = "The analysis stopped unexpectedly (the device may be low on memory)";
+const CRASHED = "The analysis stopped unexpectedly";
+
+/** Starts a worker with a query on its script's address that no older copy in the browser's cache has.
+ * Copies cached before the site was cross-origin isolated (they're kept for a year) came without the
+ * isolation header, and Chrome won't start a worker from one: it fails with no message. Bump `v` if
+ * the site's headers change again. */
+export function fresh(spawn: () => Worker): Worker {
+  const Real = window.Worker;
+  window.Worker = class extends Real {
+    constructor(url: string | URL, opts?: WorkerOptions) {
+      const u = new URL(url, location.href);
+      u.searchParams.set("v", "2");
+      super(u, opts);
+    }
+  };
+  try {
+    return spawn();
+  } finally {
+    window.Worker = Real;
+  }
+}
 
 class WorkerLink {
   private worker: Worker | null = null;
@@ -52,7 +72,7 @@ class WorkerLink {
 
   private get w(): Worker {
     if (!this.worker) {
-      const w = this.spawn();
+      const w = fresh(this.spawn);
       this.started = false;
       w.onmessage = (e: MessageEvent<WorkerMessage>) => (e.data.id === 0 ? (this.started = true) : this.pending.get(e.data.id)?.onMsg(e.data));
       w.onerror = (e) => {
@@ -122,9 +142,13 @@ export class Analyzer {
   private notesWorker = new WorkerLink(() => new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" }), "notes");
   private notesSingle = new WorkerLink(() => new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module", name: "single" }), "notes-single");
   readonly ready: Promise<void>;
+  private liveHere = false;
 
   constructor() {
-    this.ready = this.chordsWorker.call({ type: "load" }).then(() => undefined);
+    this.ready = this.chordsWorker.call({ type: "load" }).then(
+      () => undefined,
+      () => undefined,
+    );
   }
 
   /** Chords and beats of a whole song, in seconds. A worker that crashes or goes quiet for a minute is
@@ -140,8 +164,7 @@ export class Analyzer {
         logEvent("chords-retry", { worker: link === this.chordsWorker ? "chords" : "chords-single", error: String(e instanceof Error ? e.message : e).slice(0, 200) });
       }
     }
-    const { chordEngine } = await import("./analysis/chord-engine");
-    const pass = await chordEngine(1).chords(samples, progress);
+    const pass = await (await chordsHere()).chords(samples, progress);
     return { id: 0, type: "chords", ...pass };
   }
 
@@ -153,13 +176,23 @@ export class Analyzer {
       else if (m.type === "partial") on.partial?.(m.notes, m.upTo);
     };
     const req = { type: "notes", samples, frames: pass.frames, rhythm: pass.rhythm } as const;
+    // a crash gets one more try in a fresh single-threaded worker, then the page works the tab out
+    // itself; a reported error is final
+    const crashed = (e: unknown, worker: string) => {
+      if (!(e instanceof Error) || e.message !== CRASHED) throw e;
+      logEvent("tab-retry", { worker });
+    };
     let m: WorkerMessage;
     try {
       m = await this.notesWorker.call(req, onMsg);
     } catch (e) {
-      // a crash gets one more try in a fresh single-threaded worker; a reported error is final
-      if (!(e instanceof Error) || e.message !== CRASHED) throw e;
-      m = await this.notesSingle.call(req, onMsg);
+      crashed(e, "notes");
+      try {
+        m = await this.notesSingle.call(req, onMsg);
+      } catch (e) {
+        crashed(e, "notes-single");
+        m = await notesHere(req, onMsg);
+      }
     }
     if (m.type !== "done") throw new Error("Unexpected worker reply");
     return m.result;
@@ -167,7 +200,16 @@ export class Analyzer {
 
   /** Chord class per CQT frame for the last <=10 s of audio, plus the frame hop in seconds. */
   async live(samples: Float32Array): Promise<{ frames: Int32Array; hop: number }> {
-    const m = await this.chordsWorker.call({ type: "live", samples });
+    // once the worker has failed, the page listens itself
+    if (this.liveHere) return (await chordsHere()).live(samples);
+    let m: WorkerMessage;
+    try {
+      m = await this.chordsWorker.call({ type: "live", samples });
+    } catch (e) {
+      if (!(e instanceof Error) || e.message !== CRASHED) throw e;
+      this.liveHere = true;
+      return (await chordsHere()).live(samples);
+    }
     if (m.type !== "live") throw new Error("Unexpected worker reply");
     return { frames: m.frames, hop: m.hop };
   }
@@ -179,6 +221,23 @@ export class Analyzer {
   terminate() {
     for (const w of [this.chordsWorker, this.singleWorker, this.notesWorker, this.notesSingle]) w.terminate();
   }
+}
+
+let pageChords: Promise<ReturnType<typeof import("./analysis/chord-engine").chordEngine>> | null = null;
+/** The chord model on the page itself, on one thread. */
+const chordsHere = () => (pageChords ??= import("./analysis/chord-engine").then((m) => m.chordEngine(1)));
+
+/** The tab worked out on the page itself, on one thread. */
+async function notesHere(req: Omit<Extract<WorkerRequest, { type: "notes" }>, "id">, onMsg: (m: WorkerMessage) => void): Promise<WorkerMessage> {
+  const { notesEngine } = await import("./analysis/notes-engine");
+  return new Promise((resolve, reject) => {
+    const handle = notesEngine(1, (m) => {
+      if (m.type === "progress" || m.type === "partial") onMsg(m);
+      else if (m.type === "error") reject(new Error(m.message));
+      else resolve(m);
+    });
+    handle({ ...req, id: 1 });
+  });
 }
 
 let shared: Analyzer | null = null;

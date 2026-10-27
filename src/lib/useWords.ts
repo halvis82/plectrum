@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CaptionLine, Captions } from "./captions";
-import { decodeToMono, loadLocalAudio } from "./audio";
+import { decodeToMono, fresh, loadLocalAudio } from "./audio";
 import type { LyricsState } from "@/components/song/Sheets";
 import type { LyricsInfo } from "@/components/song/SourcePanel";
 import type { WhisperMessage } from "./whisper.worker";
@@ -73,7 +73,7 @@ export function useWords(song: Song, duration: number, transport: Transport, wan
       if (!blob) throw new Error("The audio isn't available on this device.");
       setJob({ state: "Reading the audio", p: null });
       const samples = await decodeToMono(blob, 120_000, 16000);
-      const w = new Worker(new URL("./whisper.worker.ts", import.meta.url), { type: "module" });
+      const w = fresh(() => new Worker(new URL("./whisper.worker.ts", import.meta.url), { type: "module" }));
       const result = await new Promise<{ lines: CaptionLine[]; lang: string | null }>((resolve, reject) => {
         w.onmessage = (e: MessageEvent<WhisperMessage>) => {
           const m = e.data;
@@ -81,7 +81,7 @@ export function useWords(song: Song, duration: number, transport: Transport, wan
           else if (m.type === "done") resolve(m);
           else reject(new Error(m.message));
         };
-        w.onerror = () => reject(new Error("The transcriber stopped (the device may be low on memory)."));
+        w.onerror = () => reject(new Error("The transcriber stopped unexpectedly."));
         w.postMessage({ samples }, [samples.buffer]);
       }).finally(() => w.terminate());
       const captions: Captions = { source: "transcribed", lang: result.lang, lines: result.lines };
