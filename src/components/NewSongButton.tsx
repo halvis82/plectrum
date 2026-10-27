@@ -8,7 +8,7 @@ export function NewSongButton() {
   const path = usePathname();
   return (
     <nav className="flex items-center gap-2">
-      <Link href="/tuner" className={`btn btn-sm ${path === "/tuner" ? "btn-primary" : "btn-ghost"}`} aria-current={path === "/tuner" ? "page" : undefined}>
+      <Link href="/tuner" className={`btn btn-sm btn-ghost ${path === "/tuner" ? "text-accent" : ""}`} aria-current={path === "/tuner" ? "page" : undefined}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
           <path d="M4 18a9 9 0 1 1 16 0" />
           <path d="M12 18l4-7" />
