@@ -6,6 +6,7 @@ import { analyzeChords, type ModelMeta } from "./analyze";
 import { FRAMES_PER_CHUNK, HOP, N_BINS, SR, logCqt, parseBasis, type CqtBasis } from "./cqt";
 import { N_CLASSES, viterbi } from "./decode";
 import { download, type WorkerMessage, type WorkerRequest } from "./worker-shared";
+import { halfToFloat } from "./guitar";
 
 // served from this site by scripts/copy-ort.mjs
 ort.env.wasm.wasmPaths = `/ort/${ort.env.versions.web}/`;
@@ -19,12 +20,15 @@ let loaded = 0;
 
 function loadChords() {
   chords ??= (async () => {
-    const [model, basisBuf, meta] = await Promise.all([
-      download("/model/btc170.v1.onnx", (p) => (loaded = p)),
+    // the weights ship as float16 (scripts/chords_half.py) and run as float32
+    const [graph, half, basisBuf, meta] = await Promise.all([
+      fetch("/model/btc170.v2.onnx").then((r) => r.arrayBuffer()),
+      download("/model/btc170.v2.f16", (p) => (loaded = p)),
       fetch("/model/cqt_basis.v1.bin").then((r) => r.arrayBuffer()),
       fetch("/model/btc170.v1.json").then((r) => r.json() as Promise<ModelMeta>),
     ]);
-    const session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"] });
+    const weights = new Uint8Array(halfToFloat(new Uint16Array(half)).buffer);
+    const session = await ort.InferenceSession.create(graph, { executionProviders: ["wasm"], externalData: [{ path: "btc170.v2.data", data: weights }] });
     ready = true;
     return { session, basis: parseBasis(basisBuf), meta };
   })();

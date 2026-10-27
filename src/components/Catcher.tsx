@@ -400,10 +400,8 @@ export function Catcher() {
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       if (samples.length < SR * 3 || peak < 0.003) throw new Error("There wasn't enough music to work with. Give it at least a few seconds.");
       if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
-      // the song opens as soon as its chords are in; its page then shows the tab filling in. The song's
-      // audio is in hand now, so the big note model can come down while the chords are worked out
+      // the song opens as soon as its chords are in; its page then shows the tab filling in
       const an = getAnalyzer();
-      an.prefetch();
       const pass = await an.chords(samples, (stage, p) => stage !== "notes" && stage !== "paused" && step(flow, stage, p));
       const analysis = pass.result;
       step(flow, "save");
@@ -428,7 +426,10 @@ export function Catcher() {
       };
       setPending(id, { label: STAGE_LABEL.notes, p: 0, local, save: { state: "saving" } });
       const saving = saveSong(id, JSON.stringify({ ...meta, id, key, analysis }));
-      void an
+      // the tab (and the first time, its 77 MB of models) starts once the song's page is up: big downloads
+      // fill the connection, and the page and the save would otherwise queue behind them for seconds
+      const startTab = () =>
+        void an
         .tab(samples, pass, {
           // a paused tab keeps its progress bar where it was
           progress: (stage, p) => setPending(id, stage === "paused" ? { label: STAGE_LABEL.paused } : { label: STAGE_LABEL[stage], p }),
@@ -456,6 +457,7 @@ export function Catcher() {
           logEvent("tab-fail", { error: String(e instanceof Error ? e.message : e).slice(0, 300) });
           setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` });
         });
+      setTimeout(startTab, 1500);
       if (localAudio) await saveLocalAudio(id, localAudio);
       report("song-ok", { source: meta.source, minutes: +(samples.length / SR / 60).toFixed(1) });
       const tabStart = Date.now();
