@@ -178,15 +178,16 @@ export function detectTuning(notes: TabInput[], o: TabOptions = DEFAULT_TAB): Tu
   // notes below any guitar tuning mean a bass is playing, and its notes explain the low ones too
   const bass = notes.filter((n) => n.midi < 36).reduce((a, n) => a + n.amp, 0);
   if (bass > BASS_SHARE_MAX * lowStrength) return "standard";
-  // a guitar's low notes come inside chords: the fifth above starts with them (power chords); a bass
-  // note usually stands alone
-  const withFifth = low.filter((l) => notes.some((n) => n.midi === l.midi + 7 && Math.abs(n.start - l.start) < 0.05)).length;
-  if (withFifth < FIFTH_SHARE_MIN * low.length) return "standard";
+  // the tunings are compared where they differ: the passages around the low notes (elsewhere a mix's
+  // other instruments decide the cost)
+  const near = notes.filter((n) => low.some((l) => Math.abs(n.start - l.start) < LOW_CONTEXT));
   let best: TuningId = "standard";
   let bestCost = Infinity;
   for (const t of TUNINGS) {
-    if (t.strings[0] > Math.min(...low.map((n) => n.midi))) continue;
-    const { cost, kept } = scoredTab(notes, t.strings, o);
+    // a tuning has to reach nearly all of the low notes (a few stray ones don't decide it)
+    const reached = low.filter((n) => n.midi >= t.strings[0]).reduce((a, n) => a + n.amp, 0);
+    if (reached < LOW_REACH_MIN * lowStrength) continue;
+    const { cost, kept } = scoredTab(near, t.strings, o);
     const c = cost / Math.max(1, kept);
     if (c < bestCost) {
       bestCost = c;
@@ -196,11 +197,14 @@ export function detectTuning(notes: TabInput[], o: TabOptions = DEFAULT_TAB): Tu
   return best;
 }
 
-/** Evidence needed for a lowered tuning: at least this many notes below low E, carrying this share of the strength. */
+/** Evidence needed for a lowered tuning: at least this many notes below low E, carrying this share of
+ * the strength. Standard-tuned GuitarSet takes and band mixes (with a bass) stay under 3%. */
 const LOW_NOTES_MIN = 6;
-const LOW_SHARE_MIN = 0.01;
+const LOW_SHARE_MIN = 0.03;
 const BASS_SHARE_MAX = 0.25;
-const FIFTH_SHARE_MIN = 0.3;
+const LOW_REACH_MIN = 0.9;
+/** seconds around each low note that the tunings are compared on */
+const LOW_CONTEXT = 2;
 
 function scoredTab(notes: TabInput[], tuning: readonly number[], o: TabOptions): { tab: TabNote[]; cost: number; kept: number } {
   const lowest = tuning[0];

@@ -42,11 +42,14 @@ export function useEdits(songId: string, initial: Edits | null) {
 
   // the current edits, read synchronously so a change never runs inside a state updater
   const cur = useRef(edits);
+  /** edits shown but not saved (see `seed`), and what was saved before them */
+  const seeded = useRef<{ from: Edits | null; to: Edits } | null>(null);
   const commit = useCallback(
     (next: Edits | null) => {
       cur.current = next;
       setEdits(next);
-      schedule(next);
+      // undoing back to the seed saves what was there before it
+      schedule(seeded.current && next === seeded.current.to ? seeded.current.from : next);
       setHistory({ undo: past.current.length, redo: future.current.length });
     },
     [schedule],
@@ -66,6 +69,21 @@ export function useEdits(songId: string, initial: Edits | null) {
     },
     [commit],
   );
+
+  /** Shows `e` without saving it: it is saved with the first change made to it, and `unseed` drops it
+   * again if none was. Opening the editor and leaving changes nothing for anyone. */
+  const seed = useCallback((e: Edits) => {
+    seeded.current = { from: cur.current, to: e };
+    cur.current = e;
+    setEdits(e);
+  }, []);
+  const unseed = useCallback(() => {
+    if (seeded.current && cur.current === seeded.current.to) {
+      cur.current = seeded.current.from;
+      setEdits(seeded.current.from);
+    }
+    seeded.current = null;
+  }, []);
 
   const undo = useCallback(() => {
     if (!past.current.length) return;
@@ -93,5 +111,5 @@ export function useEdits(songId: string, initial: Edits | null) {
     };
   }, [save, persist]);
 
-  return { edits, change, undo, redo, canUndo: history.undo > 0, canRedo: history.redo > 0, save, retry: () => void persist(latest.current) };
+  return { edits, change, seed, unseed, undo, redo, canUndo: history.undo > 0, canRedo: history.redo > 0, save, retry: () => void persist(latest.current) };
 }

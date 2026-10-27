@@ -220,15 +220,16 @@ export function SongView({ song }: { song: SongData }) {
   // ---- editing ----
   const startEditing = useCallback(() => {
     if (!edits?.tab) {
-      // the tab as it reads now becomes the written one (no capo or transposition, so frets are as played)
+      // the tab as it reads now becomes the written one (no capo or transposition, so frets are as played),
+      // saved only once something in it changes
       const tuning = autoTuning.strings;
       const tab = shownRows ? toTab(shownRows.map((r) => rowToInput(r)), tuning) : [];
       const asWritten: EditNote[] = tab.map((n) => [+n.start.toFixed(3), +Math.max(0.05, n.end - n.start).toFixed(3), n.string, n.fret, 0]);
-      ed.change((e) => ({ ...e, v: 1, tab: asWritten, tuning: [...tuning] }));
+      ed.seed({ ...edits, v: 1, tab: asWritten, tuning: [...tuning] });
       update({ capo: 0, transpose: 0, mode: "tab" });
     } else update({ mode: "tab" });
     setEditing(true);
-  }, [edits?.tab, autoTuning.strings, shownRows, ed, update]);
+  }, [edits, autoTuning.strings, shownRows, ed, update]);
 
   // a new song from scratch opens ready to write in
   const openedForEditing = useRef(false);
@@ -694,6 +695,7 @@ export function SongView({ song }: { song: SongData }) {
             done={() => {
               setSelected(null);
               setEditing(false);
+              ed.unseed();
             }}
             deselect={() => setSelected(null)}
             empty={!written?.length}
