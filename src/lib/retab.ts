@@ -25,15 +25,17 @@ export async function workOutTab(id: string, audio: (onProgress: (p: number) => 
       progress: (stage, p) => setPending(id, stage === "paused" ? { label: STAGE_LABEL.paused } : { label: STAGE_LABEL[stage], p }),
       partial: (notes, upTo) => setPending(id, { partial: { notes, upTo } }),
     });
-    setPending(id, { analysis: done });
+    // saving: leaving the page now asks first (see pending.ts)
+    setPending(id, { analysis: done, save: { state: "saving" } });
     logEvent("retab-ok", { secs: Math.round((Date.now() - t0) / 1000), notes: done.notes?.length ?? 0 });
     const { notes, chords, segments, meter, downbeat } = done;
-    const res = await fetch(`/api/songs/${id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
-    }).catch(() => null);
-    if (!res?.ok) setPending(id, { error: "The tab is done, but it couldn't be saved to the library, so it only shows on this device until you reload." });
+    const body = JSON.stringify({ key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } });
+    const save = async () => {
+      setPending(id, { save: { state: "saving" } });
+      const res = await fetch(`/api/songs/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body }).catch(() => null);
+      setPending(id, { save: res?.ok ? { state: "saved" } : { state: "error", retry: () => void save() } });
+    };
+    await save();
   } catch (e) {
     logEvent("retab-fail", { error: String(e instanceof Error ? e.message : e).slice(0, 300) });
     setPending(id, { error: `The tab couldn't be worked out: ${e instanceof Error ? e.message : e}` });
