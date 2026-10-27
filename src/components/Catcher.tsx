@@ -8,6 +8,7 @@ import { setPending } from "@/lib/pending";
 import { PcmCapture, encodeWav, resample } from "@/lib/capture";
 import { chordName, detectKey, keyName, labelFromIndex, parseLabel, spellingFor } from "@/lib/music";
 import { songStats } from "@/lib/sheet";
+import { logEvent } from "@/lib/log";
 
 type Resolved = {
   kind: "youtube" | "spotify" | "apple" | "deezer" | "web";
@@ -28,6 +29,8 @@ type Card = { title: string; artist: string | null; image: string | null; note?:
 type Phase =
   | { kind: "idle" }
   | { kind: "listening"; t: number; level: number; waiting: boolean }
+  /** asking the browser for the microphone; `slow` once that has taken a while */
+  | { kind: "mic"; slow: boolean }
   | { kind: "working"; flow: Flow; step: StepKey; p?: number; stepStart: number; start: number };
 
 /** Every step a song can go through, in order, with its share of the progress bar. */
@@ -63,6 +66,9 @@ const SITE_NAME: Record<string, string> = { soundcloud: "SoundCloud", bandcamp: 
 /** yt-dlp extractor names -> stored source ("generic" is a plain file link) */
 const sourceOf = (site: string) => (site === "generic" ? "web" : site.replace(/[^a-z0-9]/g, "").slice(0, 24) || "web");
 
+/** when each song's tab started, for the diagnostics log */
+const tabWatch = new Map<string, number>();
+
 /** Live chord timeline while listening: frame-level classes keyed by position. */
 type Live = { hop: number; frames: Map<number, number> };
 
@@ -82,8 +88,20 @@ export function Catcher() {
   /** what "Try again" repeats */
   const retryRef = useRef<(() => void) | null>(null);
 
+  // each job's steps with the seconds they started at, for the diagnostics log
+  const trail = useRef<{ start: number; steps: [StepKey, number][] }>({ start: 0, steps: [] });
+  const report = (kind: "song-ok" | "song-fail", extra: Record<string, unknown> = {}) => {
+    const t = trail.current;
+    if (!t.start) return;
+    logEvent(kind, { steps: t.steps, secs: +((Date.now() - t.start) / 1000).toFixed(1), ...extra });
+    trail.current = { start: 0, steps: [] };
+  };
+
   /** Moves the progress to a step (or updates the current step's share when it is the same one). */
-  const step = (flow: Flow, key: StepKey, p?: number) =>
+  const step = (flow: Flow, key: StepKey, p?: number) => {
+    const t = trail.current;
+    if (!t.start) trail.current = { start: Date.now(), steps: [[flow[0] === "read" ? "read" : flow[0], 0]] };
+    if (trail.current.steps.at(-1)?.[0] !== key) trail.current.steps.push([key, +((Date.now() - trail.current.start) / 1000).toFixed(1)]);
     setPhase((ph) => {
       const now = Date.now();
       const same = ph.kind === "working" && ph.step === key;
@@ -92,6 +110,7 @@ export function Catcher() {
       if (ph.kind === "working" && flow.indexOf(key) < flow.indexOf(ph.step)) return ph;
       return { kind: "working", flow, step: key, p, stepStart: same ? ph.stepStart : now, start };
     });
+  };
 
   /** Back to an empty catcher, ready for the next song. */
   const reset = () => {
@@ -106,6 +125,8 @@ export function Catcher() {
     lastLink.current = "";
   };
   const go = (path: string) => {
+    // a link already in the library opens its song
+    report("song-ok", { reused: true });
     reset();
     router.push(path);
   };
@@ -126,19 +147,16 @@ export function Catcher() {
     return () => window.removeEventListener("cc:new-song", clean);
   }, [idle]);
 
-  /** The chord model starts loading in the background and is cached afterwards. */
-  const getAnalyzer = () => {
-    const an = sharedAnalyzer();
-    // someone is about to catch a song: start the large note model download
-    an.prefetch();
-    return an;
-  };
+  /** The chord model starts loading in the background and is cached afterwards. The large note model
+   * waits until a song's chords are saved, so it never competes with the song's own download. */
+  const getAnalyzer = () => sharedAnalyzer();
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1500));
     idle(() => sharedAnalyzer());
   }, []);
 
   function fail(message: string, retry?: () => void) {
+    report("song-fail", { error: message.slice(0, 300) });
     stopRef.current = null;
     cancelRef.current = null;
     retryRef.current = retry ?? null;
@@ -157,7 +175,7 @@ export function Catcher() {
     const F = LINK_FLOW;
     step(F, "find");
     try {
-      let r = await fetch(`/api/resolve?url=${encodeURIComponent(link.trim())}`);
+      let r = await sturdyFetch(`/api/resolve?url=${encodeURIComponent(link.trim())}`);
       let resolved: Resolved = await r.json();
       if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
       if (resolved.existing) return go(`/song/${resolved.existing}`);
@@ -180,7 +198,7 @@ export function Catcher() {
         if (!got.song) throw new Error(got.error);
         site = new URL(resolved.sourceUrl).hostname.replace(/^www\.|^m\./, "").split(".")[0];
         const q = new URLSearchParams({ title: got.song.title, artist: got.song.artist ?? "", duration: String(got.song.duration ?? ""), url: resolved.sourceUrl });
-        r = await fetch(`/api/resolve?${q}`);
+        r = await sturdyFetch(`/api/resolve?${q}`);
         resolved = await r.json();
         if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
         if (resolved.existing) return go(`/song/${resolved.existing}`);
@@ -193,12 +211,14 @@ export function Catcher() {
       for (let attempt = 0; attempt < 4 && !audio; attempt++) {
         if (attempt === 1 && resolved.alternatives.length === 0 && !site) {
           // only look for other uploads of the song if the first one fails
-          r = await fetch(`/api/resolve?alts&url=${encodeURIComponent(resolved.sourceUrl)}`);
+          r = await sturdyFetch(`/api/resolve?alts&url=${encodeURIComponent(resolved.sourceUrl)}`);
           if (r.ok) resolved = await r.json();
         }
         videoId = attempt === 0 ? resolved.videoId : resolved.alternatives[attempt - 1];
         if (!videoId) break;
-        const got = await download(`/api/audio/${videoId}`, progress);
+        let got = await download(`/api/audio/${videoId}`, progress);
+        // a stalled or dropped download gets one more go before trying another upload
+        if ("error" in got && got.retry) got = await download(`/api/audio/${videoId}`, progress);
         if ("blob" in got) audio = got.blob;
       }
       let meta: Meta = { title: resolved.title, artist: resolved.artist, source: site ? sourceOf(site) : resolved.kind, sourceUrl: resolved.sourceUrl, youtubeId: videoId ?? undefined };
@@ -264,13 +284,29 @@ export function Catcher() {
     setError(null);
     setSong(null);
     const an = getAnalyzer();
+    // the browser may be showing a permission prompt (or waiting on the system's): say so right away
+    setPhase({ kind: "mic", slow: false });
+    const slow = setTimeout(() => setPhase((ph) => (ph.kind === "mic" ? { kind: "mic", slow: true } : ph)), 6000);
     let stream: MediaStream;
+    let pcm: PcmCapture;
     try {
       stream = await getMicStream();
-    } catch {
-      return setError("Microphone access is needed to listen.");
+      pcm = await PcmCapture.start(stream);
+    } catch (e) {
+      const name = e instanceof DOMException ? e.name : "";
+      return fail(
+        name === "NotAllowedError"
+          ? "The microphone is blocked for this site. Click the icon at the left of the address bar, allow the microphone, then tap Listen again. On a Mac, also check System Settings › Privacy & Security › Microphone for your browser."
+          : name === "NotFoundError"
+            ? "No microphone was found. Plug one in or pick one in your system's sound settings, then try again."
+            : name === "NotReadableError"
+              ? "The microphone is busy in another app (a call, a recorder). Close it and try again."
+              : `The microphone couldn't start (${e instanceof Error ? e.message : e}). Try again, or reload the page.`,
+        () => void listen(),
+      );
+    } finally {
+      clearTimeout(slow);
     }
-    const pcm = await PcmCapture.start(stream);
     const liveState: Live = { hop: 2048 / SR, frames: new Map() };
     setLive({ ...liveState });
     let stopped = false;
@@ -330,15 +366,16 @@ export function Catcher() {
       const pass = await an.chords(samples, (stage, p) => stage !== "notes" && stage !== "paused" && step(flow, stage, p));
       const analysis = pass.result;
       step(flow, "save");
-      const res = await fetch("/api/songs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...meta, key: keyName(songStats(analysis).key), analysis }),
-      });
+      const res = await sturdyFetch(
+        "/api/songs",
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...meta, key: keyName(songStats(analysis).key), analysis }) },
+        { timeoutMs: 30_000, tries: 3 },
+      );
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Saving failed");
       const id: string = body.id;
       setPending(id, { label: STAGE_LABEL.notes, p: 0 });
+      an.prefetch();
       void an
         .tab(samples, pass, {
           // a paused tab keeps its progress bar where it was
@@ -347,16 +384,27 @@ export function Catcher() {
         })
         .then(async (done) => {
           setPending(id, { analysis: done });
+          logEvent("tab-ok", { secs: +((Date.now() - (tabWatch.get(id) ?? Date.now())) / 1000).toFixed(1), notes: done.notes?.length ?? 0 });
           const { notes, chords, segments, meter, downbeat } = done;
-          const saved = await fetch(`/api/songs/${id}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ editKey: body.editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
-          }).catch(() => null);
+          const saved = await sturdyFetch(
+            `/api/songs/${id}`,
+            {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ editKey: body.editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
+            },
+            { timeoutMs: 60_000, tries: 4 },
+          ).catch(() => null);
           if (!saved?.ok) setPending(id, { error: "The tab couldn't be saved, so it only shows on this device until you reload." });
         })
-        .catch((e) => setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` }));
+        .catch((e) => {
+          logEvent("tab-fail", { error: String(e instanceof Error ? e.message : e).slice(0, 300) });
+          setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` });
+        });
       if (localAudio) await saveLocalAudio(id, localAudio);
+      report("song-ok", { source: meta.source, minutes: +(samples.length / SR / 60).toFixed(1) });
+      const tabStart = Date.now();
+      tabWatch.set(id, tabStart);
       // this page is kept for the way back ("New song"), so leave it ready for the next one
       go(`/song/${id}`);
     } catch (e) {
@@ -405,7 +453,7 @@ export function Catcher() {
         <input
           type="url"
           inputMode="url"
-          placeholder="Paste a link: YouTube, Spotify, SoundCloud, more"
+          placeholder="Paste a song link"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onPaste={(e) => {
@@ -418,7 +466,7 @@ export function Catcher() {
           onFocus={() => getAnalyzer()}
           disabled={busy}
           aria-label="Song link"
-          className="w-full rounded-2xl border border-line bg-bg px-4 py-4 text-lg outline-none focus:border-accent disabled:opacity-60"
+          className="w-full rounded-2xl border border-line bg-bg px-4 py-3.5 text-base sm:text-lg outline-none transition focus:border-accent disabled:opacity-60"
         />
       </form>
 
@@ -426,14 +474,22 @@ export function Catcher() {
         <>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <input ref={fileInput} type="file" accept="audio/*,video/*" className="hidden" onChange={(e) => void handleFile(e.target.files?.[0])} />
-            <button onClick={() => fileInput.current?.click()} className="rounded-2xl border border-line py-3.5 font-medium hover:border-accent">
-              📁 Upload a song
+            <button onClick={() => fileInput.current?.click()} className="btn py-3.5">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 16V4M7 9l5-5 5 5" />
+                <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+              </svg>
+              Upload a song
             </button>
-            <button onClick={() => void listen()} className="rounded-2xl border border-line py-3.5 font-medium hover:border-accent">
-              🎙️ Listen
+            <button onClick={() => void listen()} className="btn py-3.5">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+              </svg>
+              Listen
             </button>
           </div>
-          <p className="mt-3 text-xs text-muted">Drop a file anywhere here, or tap Listen and hold your phone near a speaker.</p>
+          <p className="mt-3 text-xs text-muted">YouTube, Spotify, SoundCloud and more. Or drop a file here, or tap Listen near a speaker or while you play.</p>
         </>
       )}
 
@@ -457,6 +513,22 @@ export function Catcher() {
         </div>
       )}
 
+      {phase.kind === "mic" && (
+        <div className="mt-4 rounded-2xl bg-surface-2 p-4 text-sm" aria-live="polite">
+          <p className="font-medium flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" aria-hidden />
+            Waiting for the microphone…
+          </p>
+          <p className="mt-1 text-muted">
+            {phase.slow
+              ? "Your browser is asking for permission: look for the prompt near the address bar and choose Allow. On a Mac, the browser also needs the microphone in System Settings › Privacy & Security › Microphone."
+              : "Allow the microphone when your browser asks."}
+          </p>
+          <button onClick={() => setPhase({ kind: "idle" })} className="btn btn-sm mt-3">
+            Cancel
+          </button>
+        </div>
+      )}
       {listening && (
         <div className="mt-4">
           <LiveChords live={live} t={listening.t} />
@@ -468,10 +540,10 @@ export function Catcher() {
             </span>
           </div>
           <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
-            <button onClick={() => stopRef.current?.()} className="rounded-2xl bg-accent text-accent-fg py-3.5 font-semibold">
+            <button onClick={() => stopRef.current?.()} className="btn btn-primary py-3.5">
               Done, show the chords
             </button>
-            <button onClick={() => cancelRef.current?.()} className="rounded-2xl border border-line px-4">
+            <button onClick={() => cancelRef.current?.()} className="btn px-4">
               Cancel
             </button>
           </div>
@@ -551,15 +623,38 @@ const SHORT: Record<StepKey, string> = {
 /** Other sites' cover art goes through this origin (see /api/thumb). */
 const thumb = (url: string | null) => (url ? `/api/thumb?u=${encodeURIComponent(url)}` : null);
 
-/** Downloads with progress, plus what /api/media says it found; an error message if the server couldn't get it. */
+/** fetch with a timeout per try and retries (with a growing pause) on network errors and server errors */
+async function sturdyFetch(url: string, init: RequestInit = {}, o: { timeoutMs?: number; tries?: number } = {}): Promise<Response> {
+  const { timeoutMs = 25_000, tries = 2 } = o;
+  let last: unknown = null;
+  for (let k = 0; k < tries; k++) {
+    if (k) await new Promise((r) => setTimeout(r, 800 * 2 ** k));
+    try {
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      // a server error may be passing; a 4xx says what's wrong with the request
+      if (res.status < 500 || k === tries - 1) return res;
+      last = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw new Error(last instanceof Error && last.name === "TimeoutError" ? "The server took too long to answer. Check the connection and try again." : "Couldn't reach the server. Check the connection and try again.");
+}
+
+/** Downloads with progress, plus what /api/media says it found; an error message if the server couldn't
+ * get it. A response that hasn't started within 60 s, or a download with no data for 25 s, is given up
+ * on (`retry`: worth trying again). */
 async function download(
   url: string,
   onProgress: (p: number) => void,
-): Promise<{ blob: Blob; meta: MediaMeta | null } | { error: string; song?: { title: string; artist: string | null; duration: number | null } | null }> {
-  const res = await fetch(url).catch(() => null);
+): Promise<{ blob: Blob; meta: MediaMeta | null } | { error: string; retry?: boolean; song?: { title: string; artist: string | null; duration: number | null } | null }> {
+  const ctl = new AbortController();
+  let timer = window.setTimeout(() => ctl.abort(), 60_000);
+  const res = await fetch(url, { signal: ctl.signal }).catch(() => null);
+  clearTimeout(timer);
   if (!res?.ok || !res.body) {
     const body = await res?.json().catch(() => null);
-    return { error: body?.error ?? "Couldn't get the audio.", song: body?.song };
+    return { error: body?.error ?? "Couldn't get the audio.", song: body?.song, retry: !res || res.status >= 500 };
   }
   const total = Number(res.headers.get("content-length")) || 0;
   const header = res.headers.get("x-media");
@@ -569,17 +664,26 @@ async function download(
   const reader = res.body.getReader();
   const parts: Uint8Array<ArrayBuffer>[] = [];
   let got = 0;
+  const stall = () => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => ctl.abort(), 25_000);
+  };
   try {
+    stall();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      stall();
       parts.push(value);
       got += value.length;
       if (expect) onProgress(Math.min(0.99, got / expect));
     }
   } catch {
-    return { error: "The download was interrupted. Try again." };
+    return { error: "The download stopped partway. Trying again…", retry: true };
+  } finally {
+    clearTimeout(timer);
   }
+  if (total && got < total * 0.98) return { error: "The download stopped partway.", retry: true };
   return { blob: new Blob(parts, { type: res.headers.get("content-type") ?? "audio/mp4" }), meta };
 }
 

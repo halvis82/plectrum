@@ -6,7 +6,6 @@ import { detectPitch, hzOf, midiOf } from "@/lib/pitch";
 import { GuitarSynth } from "@/lib/synth";
 import { TUNINGS, stringNames, type TuningId } from "@/lib/tab";
 
-const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const IN_TUNE = 5; // cents
 
 type Reading = { string: number; cents: number; hz: number; midi: number };
@@ -16,7 +15,6 @@ export function Tuner() {
   const [on, setOn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tuningId, setTuningId] = useState<TuningId>("standard");
-  const [locked, setLocked] = useState<number | null>(null);
   const [reading, setReading] = useState<Reading | null>(null);
   const [tuned, setTuned] = useState<boolean[]>([false, false, false, false, false, false]);
   const stop = useRef<(() => void) | null>(null);
@@ -24,12 +22,10 @@ export function Tuner() {
   const tuning = TUNINGS.find((t) => t.id === tuningId)!;
   const targets = tuning.strings;
   const labels = stringNames(targets);
-  const lockedRef = useRef(locked);
   const targetsRef = useRef<readonly number[]>(targets);
   useEffect(() => {
-    lockedRef.current = locked;
     targetsRef.current = targets;
-  }, [locked, targets]);
+  }, [targets]);
 
   useEffect(() => () => stop.current?.(), []);
 
@@ -84,7 +80,7 @@ export function Tuner() {
       const med = [...recent].sort((a, b) => a - b)[recent.length >> 1];
       smooth = smooth === null || Math.abs(smooth - med) > 0.5 ? med : smooth + 0.35 * (med - smooth);
       const ts = targetsRef.current;
-      const string = lockedRef.current ?? ts.reduce((best, t, i) => (Math.abs(smooth! - t) < Math.abs(smooth! - ts[best]) ? i : best), 0);
+      const string = ts.reduce((best, t, i) => (Math.abs(smooth! - t) < Math.abs(smooth! - ts[best]) ? i : best), 0);
       const cents = (smooth - ts[string]) * 100;
       setReading({ string, cents, hz: hzOf(smooth), midi: smooth });
       if (Math.abs(cents) <= IN_TUNE) {
@@ -114,109 +110,76 @@ export function Tuner() {
   const cents = reading ? Math.max(-50, Math.min(50, reading.cents)) : 0;
   const good = reading && Math.abs(reading.cents) <= IN_TUNE;
   const angle = (cents / 50) * 60;
-  const playedName = reading ? `${NAMES[((Math.round(reading.midi) % 12) + 12) % 12]}${Math.floor(Math.round(reading.midi) / 12) - 1}` : null;
+  const color = good ? "rgb(34 197 94)" : "var(--accent)";
 
   return (
-    <div className="max-w-xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted">Tuning</span>
-          <select
-            value={tuningId}
-            onChange={(e) => {
-              setTuningId(e.target.value as TuningId);
-              setTuned([false, false, false, false, false, false]);
-            }}
-            className="select"
-          >
-            {TUNINGS.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {on && (
-          <button onClick={() => (stop.current?.(), setOn(false), setReading(null))} className="btn btn-sm">
-            Stop listening
+    <div className="max-w-md mx-auto text-center">
+      <svg viewBox="0 0 300 175" className="w-full" role="img" aria-label={reading ? `${Math.round(reading.cents)} cents ${reading.cents < 0 ? "flat" : "sharp"}` : "No note heard"}>
+        {Array.from({ length: 21 }, (_, k) => {
+          const a = ((k - 10) / 10) * 60 * (Math.PI / 180);
+          const r1 = k % 5 === 0 ? 114 : 122;
+          return <line key={k} x1={150 + Math.sin(a) * r1} y1={165 - Math.cos(a) * r1} x2={150 + Math.sin(a) * 132} y2={165 - Math.cos(a) * 132} stroke="var(--line)" strokeWidth={k === 10 ? 3 : 2} strokeLinecap="round" />;
+        })}
+        <path d={describeArc(150, 165, 142, -6, 6)} stroke="rgb(34 197 94 / 0.55)" strokeWidth="7" fill="none" strokeLinecap="round" />
+        <g style={{ transform: `rotate(${angle}deg)`, transformOrigin: "150px 165px", transition: "transform 0.12s ease-out" }} opacity={reading ? 1 : 0.2}>
+          <line x1="150" y1="165" x2="150" y2="38" stroke={color} strokeWidth="4" strokeLinecap="round" />
+        </g>
+        <circle cx="150" cy="165" r="7" fill={color} opacity={reading ? 1 : 0.3} />
+      </svg>
+
+      <div className="h-28 flex flex-col items-center justify-center">
+        {!on ? (
+          <button onClick={() => void start()} className="btn btn-primary px-8 py-3.5 text-base rounded-full">
+            Start tuning
           </button>
+        ) : reading ? (
+          <>
+            <p className="text-6xl font-bold tracking-tight leading-none">{labels[reading.string]}</p>
+            <p className={`mt-2 text-lg font-semibold ${good ? "text-green-500" : "text-accent"}`}>
+              {good ? "In tune" : reading.cents < 0 ? `Tune up ↑` : `Tune down ↓`}
+            </p>
+          </>
+        ) : (
+          <p className="text-muted">Play a string</p>
         )}
       </div>
+      {error && <p className="mt-2 text-sm rounded-xl bg-accent-soft px-3 py-2.5 text-left">{error}</p>}
 
-      {/* gauge */}
-      <div className={`mt-5 rounded-3xl border bg-surface p-5 transition-colors ${good ? "border-green-500/60" : "border-line"}`}>
-        <svg viewBox="0 0 300 170" className="w-full" role="img" aria-label={reading ? `${Math.round(reading.cents)} cents ${reading.cents < 0 ? "flat" : "sharp"}` : "No note heard"}>
-          {Array.from({ length: 21 }, (_, k) => {
-            const a = ((k - 10) / 10) * 60 * (Math.PI / 180);
-            const r1 = k % 5 === 0 ? 112 : 120;
-            return <line key={k} x1={150 + Math.sin(a) * r1} y1={160 - Math.cos(a) * r1} x2={150 + Math.sin(a) * 130} y2={160 - Math.cos(a) * 130} stroke="var(--line)" strokeWidth={k === 10 ? 3 : 2} strokeLinecap="round" />;
-          })}
-          <path d={describeArc(150, 160, 140, -6, 6)} stroke="rgb(34 197 94 / 0.5)" strokeWidth="8" fill="none" strokeLinecap="round" />
-          <g style={{ transform: `rotate(${angle}deg)`, transformOrigin: "150px 160px", transition: "transform 0.12s ease-out" }} opacity={reading ? 1 : 0.25}>
-            <line x1="150" y1="160" x2="150" y2="34" stroke={good ? "rgb(34 197 94)" : "var(--accent)"} strokeWidth="4" strokeLinecap="round" />
-          </g>
-          <circle cx="150" cy="160" r="8" fill={good ? "rgb(34 197 94)" : "var(--accent)"} />
-          <text x="22" y="166" fontSize="12" fill="var(--muted)">
-            flat
-          </text>
-          <text x="254" y="166" fontSize="12" fill="var(--muted)">
-            sharp
-          </text>
-        </svg>
-        <div className="mt-1 text-center min-h-24">
-          {!on ? (
-            <button onClick={() => void start()} className="btn btn-primary mt-2 px-6 py-3 text-base">
-              🎙️ Start tuning
-            </button>
-          ) : reading ? (
-            <>
-              <p className="text-5xl font-bold tracking-tight">{labels[reading.string]}</p>
-              <p className={`mt-1 text-lg font-semibold ${good ? "text-green-500" : "text-accent"}`}>
-                {good ? "✓ In tune" : reading.cents < 0 ? `↑ Tune up ${Math.round(-reading.cents)}¢` : `↓ Tune down ${Math.round(reading.cents)}¢`}
-              </p>
-              <p className="text-xs text-muted tabular-nums mt-1">
-                Hearing {playedName} at {reading.hz.toFixed(1)} Hz
-                {Math.abs(reading.cents) > 50 ? `, far from ${labels[reading.string]}: is it the right string?` : ""}
-              </p>
-            </>
-          ) : (
-            <p className="text-muted pt-6">Pluck one string and let it ring…</p>
-          )}
-        </div>
+      <div className="mt-6 flex justify-center gap-2.5">
+        {labels.map((n, i) => (
+          <button
+            key={i}
+            onClick={() => !on && hear(i)}
+            className={`relative h-12 w-12 rounded-full text-lg font-semibold transition ${reading?.string === i ? (good ? "bg-green-500 text-white" : "bg-accent text-accent-fg") : tuned[i] ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-surface-2"}`}
+            aria-label={`${n} string${tuned[i] ? ", in tune" : ""}`}
+            title={on ? undefined : `Hear the ${n} string`}
+          >
+            {n}
+          </button>
+        ))}
       </div>
-      {error && <p className="mt-3 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{error}</p>}
 
-      {/* strings */}
-      <div className="mt-4 grid grid-cols-6 gap-2">
-        {labels.map((n, i) => {
-          const active = reading?.string === i;
-          return (
-            <button
-              key={i}
-              onClick={() => {
-                setLocked(locked === i ? null : i);
-                if (!on) hear(i);
-              }}
-              className={`relative rounded-2xl border py-3 text-center transition ${locked === i ? "border-accent bg-accent-soft" : active ? "border-accent" : "border-line bg-surface"}`}
-              aria-pressed={locked === i}
-              aria-label={`${n} string${tuned[i] ? ", in tune" : ""}${locked === i ? ", locked" : ""}`}
-            >
-              <span className="block text-xl font-bold">{n}</span>
-              <span className="block text-[10px] text-muted tabular-nums">{hzOf(targets[i]).toFixed(0)} Hz</span>
-              {tuned[i] && <span className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-green-500 text-white text-[11px] grid place-items-center">✓</span>}
-            </button>
-          );
-        })}
-      </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-        <span>{locked === null ? "It finds the string you play. Tap a string to tune only that one." : `Tuning only the ${labels[locked]} string. Tap it again to let it find the string.`}</span>
-        <span className="flex gap-1">
-          {labels.map((n, i) => (
-            <button key={i} onClick={() => hear(i)} className="btn btn-ghost btn-sm px-2" aria-label={`Hear the ${n} string`}>
-              🔊{n}
-            </button>
+      <div className="mt-6 flex items-center justify-center gap-4 text-sm text-muted">
+        <select
+          value={tuningId}
+          onChange={(e) => {
+            setTuningId(e.target.value as TuningId);
+            setTuned([false, false, false, false, false, false]);
+          }}
+          className="bg-transparent text-muted hover:text-fg cursor-pointer"
+          aria-label="Tuning"
+        >
+          {TUNINGS.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name} tuning
+            </option>
           ))}
-        </span>
+        </select>
+        {on && (
+          <button onClick={() => (stop.current?.(), setOn(false), setReading(null))} className="hover:text-fg">
+            Stop
+          </button>
+        )}
       </div>
     </div>
   );

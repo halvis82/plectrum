@@ -6,11 +6,10 @@ export const metadata: Metadata = { title: "Guitar tuner", description: "Tune yo
 export default function TunerPage() {
   return (
     <>
-      <section className="pt-2 pb-5 max-w-xl mx-auto">
-        <h1 className="text-3xl font-bold tracking-tight">Tuner</h1>
-        <p className="mt-1 text-muted">Pluck a string near your phone or laptop. The needle shows how far off it is.</p>
-      </section>
-      <Tuner />
+      <h1 className="sr-only">Guitar tuner</h1>
+      <div className="pt-6">
+        <Tuner />
+      </div>
     </>
   );
 }

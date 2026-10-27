@@ -27,7 +27,7 @@ export function LibraryList({ initial }: { initial: SongSummary[] }) {
         placeholder="Search songs or artists"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        className="w-full sm:max-w-sm rounded-xl border border-line bg-surface px-3.5 py-2.5 mb-4 outline-none focus:border-accent"
+        className="w-full sm:max-w-sm rounded-xl border border-line bg-surface px-3.5 py-2.5 mb-4 outline-none transition focus:border-accent"
       />
       {songs.length === 0 ? (
         <p className="text-sm text-muted">{q ? "Nothing matches that." : "No songs yet. Catch the first one above."}</p>
@@ -35,7 +35,7 @@ export function LibraryList({ initial }: { initial: SongSummary[] }) {
         <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {songs.map((s) => (
             <li key={s.id}>
-              <Link href={`/song/${s.id}`} className="flex gap-3 items-center rounded-2xl bg-surface border border-line p-3 hover:border-accent transition">
+              <Link href={`/song/${s.id}`} className="flex gap-3 items-center rounded-2xl bg-surface border border-line p-2.5 hover:border-accent/60 hover:shadow-sm active:scale-[0.99] transition">
                 {s.youtube_id ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={`https://i.ytimg.com/vi/${s.youtube_id}/mqdefault.jpg`} alt="" className="h-12 w-20 rounded-lg object-cover bg-surface-2 shrink-0" loading="lazy" />

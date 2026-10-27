@@ -2,7 +2,7 @@
 // Browser audio plumbing: decoding, capture streams, the analysis worker and local storage.
 
 import type { Analysis, NoteRow } from "./analysis/analyze";
-import type { WorkerMessage, WorkerRequest } from "./analysis/worker";
+import type { WorkerMessage, WorkerRequest } from "./analysis/worker-shared";
 
 export const SR = 22050;
 
@@ -38,12 +38,13 @@ export type Stage = "model" | "features" | "chords" | "beats" | "notes" | "pause
  * that crashes (out of memory, say) fails its requests and is replaced on the next call. */
 class WorkerLink {
   private worker: Worker | null = null;
+  constructor(private spawn: () => Worker) {}
   private next = 1;
   private pending = new Map<number, { onMsg: (m: WorkerMessage) => void; reject: (e: Error) => void }>();
 
   private get w(): Worker {
     if (!this.worker) {
-      const w = new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" });
+      const w = this.spawn();
       w.onmessage = (e: MessageEvent<WorkerMessage>) => this.pending.get(e.data.id)?.onMsg(e.data);
       w.onerror = (e) => {
         e.preventDefault?.();
@@ -104,8 +105,9 @@ export type ChordPass = Extract<WorkerMessage, { type: "chords" }>;
  * never wait behind another song's tab. The chord model starts loading as soon as this exists; the
  * much larger note model only once `prefetch()` says a song is actually on its way. */
 export class Analyzer {
-  private chordsWorker = new WorkerLink();
-  private notesWorker = new WorkerLink();
+  // (each `new URL(...)` has to be written out for the bundler to find the worker)
+  private chordsWorker = new WorkerLink(() => new Worker(new URL("./analysis/chords.worker.ts", import.meta.url), { type: "module" }));
+  private notesWorker = new WorkerLink(() => new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" }));
   readonly ready: Promise<void>;
 
   constructor() {

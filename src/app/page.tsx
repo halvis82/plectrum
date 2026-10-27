@@ -7,8 +7,8 @@ export default function Home() {
   return (
     <>
       <section className="pt-4 pb-6 max-w-2xl">
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">Chords and tabs for any song.</h1>
-        <p className="mt-2 text-muted">Paste a link, upload a file, or let it listen. ChordCatch works out the chords and every note, string and fret from the audio itself.</p>
+        <h1 className="text-[1.9rem] leading-tight sm:text-4xl font-bold tracking-tight">Chords and tabs for any song.</h1>
+        <p className="mt-2 text-muted">Paste a link, upload a file or let it listen. ChordCatch works out the chords and the tab from the audio itself.</p>
       </section>
       <div className="max-w-2xl">
         <Catcher />
