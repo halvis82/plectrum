@@ -30,11 +30,15 @@ let guitarReady = false;
 
 function loadGuitar() {
   guitar ??= (async () => {
+    // all at low priority (see download); the runtime's own 28 MB file too, fetched here first so that
+    // when onnxruntime asks for it, it comes from the cache
+    const runtime = fetch(`${ort.env.wasm.wasmPaths}ort-wasm-simd-threaded.jsep.wasm`, { priority: "low" }).then((r) => r.arrayBuffer()).catch(() => null);
     const [graph, half, stringsModel] = await Promise.all([
-      fetch(GUITAR_MODEL).then((r) => r.arrayBuffer()),
-      download(GUITAR_WEIGHTS, (p) => (guitarLoaded = p)),
-      fetch("/model/strings.v2.onnx").then((r) => r.arrayBuffer()),
+      fetch(GUITAR_MODEL, { priority: "low" }).then((r) => r.arrayBuffer()),
+      download(GUITAR_WEIGHTS, (p) => (guitarLoaded = p), "low"),
+      fetch("/model/strings.v2.onnx", { priority: "low" }).then((r) => r.arrayBuffer()),
     ]);
+    await runtime;
     const strings = await ort.InferenceSession.create(stringsModel, { executionProviders: ["wasm"] });
     // weights ship as float16 and run as float32
     const weights = new Uint8Array(halfToFloat(new Uint16Array(half)).buffer);

@@ -22,9 +22,10 @@ export type WorkerMessage =
   | { id: number; type: "loaded" }
   | { id: number; type: "error"; message: string };
 
-/** Fetches a file with progress (0..1) as it arrives. */
-export async function download(url: string, onProgress: (p: number) => void): Promise<ArrayBuffer> {
-  const res = await fetch(url);
+/** Fetches a file with progress (0..1) as it arrives. Model files come down at low network priority,
+ * so the page and the song's own audio never wait behind them. */
+export async function download(url: string, onProgress: (p: number) => void, priority: RequestPriority = "auto"): Promise<ArrayBuffer> {
+  const res = await fetch(url, { priority });
   if (!res.ok || !res.body) throw new Error(`Couldn't load ${url} (HTTP ${res.status})`);
   const total = Number(res.headers.get("content-length")) || 0;
   const out = new Uint8Array(total || 50_000_000);
