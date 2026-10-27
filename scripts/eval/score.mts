@@ -2,13 +2,13 @@
 // Guitar-model activations are cached next to the audio (<name>.<model file name>.act), so re-scoring
 // is quick; the default model's cache is plain <name>.act.
 // Usage: npx tsx scripts/eval/score.mts <guitar model.onnx (export.py --single)> <strings.onnx> <set dir>...
-//   SPLIT=1 prints each file too; ONSET=<threshold> and FRAME=<threshold> override the note decoding. Notes match on onset (50 ms) and pitch; the tab also needs the string.
+//   SPLIT=1 prints each file too; TAB=<json> overrides fingering options; ONSET=<threshold> and FRAME=<threshold> override the note decoding. Notes match on onset (50 ms) and pitch; the tab also needs the string.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import * as ort from "onnxruntime-node";
 import { DEFAULT_GUITAR_NOTES, GUITAR_SR, SEGMENT, decodeGuitarNotes, guitarActivations, resampleTo } from "../../src/lib/analysis/guitar";
 import { stringProbs } from "../../src/lib/analysis/strings";
-import { STANDARD, toTab, type TabNote } from "../../src/lib/tab";
+import { DEFAULT_TAB, STANDARD, toTab, type TabNote } from "../../src/lib/tab";
 
 const [, , modelPath, stringsPath, ...dirs] = process.argv;
 const opts = { intraOpNumThreads: 3, interOpNumThreads: 1 };
@@ -60,7 +60,7 @@ for (const dir of dirs) {
     const thresholds = { ...DEFAULT_GUITAR_NOTES, ...(process.env.ONSET ? { onset: Number(process.env.ONSET) } : {}), ...(process.env.FRAME ? { frame: Number(process.env.FRAME) } : {}) };
     const notes = decodeGuitarNotes(acts, thresholds).filter((n) => n.midi >= 40 && n.midi <= 88);
     const p = await stringProbs(y, notes, runStrings);
-    const tab = toTab(notes.map((n, i) => ({ ...n, strings: p.subarray(i * 6, i * 6 + 6) })), STANDARD);
+    const tab = toTab(notes.map((n, i) => ({ ...n, strings: p.subarray(i * 6, i * 6 + 6) })), STANDARD, { ...DEFAULT_TAB, ...JSON.parse(process.env.TAB ?? "{}") });
     const ref = (JSON.parse(readFileSync(join(dir, name + ".json"), "utf8")) as number[][]).map(([start, , midi, string]) => ({ start, midi, string })).filter((r) => r.midi >= 40 && r.midi <= 88);
     const hits = match(ref, tab as TabNote[]);
     const withStr = hits.filter(([r]) => r.string >= 0);
