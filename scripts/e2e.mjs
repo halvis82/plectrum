@@ -84,8 +84,11 @@ async function tabNotes(page) {
     return { bars: labels.length, notes: labels.join(" ").match(/fret \d+/g)?.length ?? 0 };
   };
   const t0 = Date.now();
-  // the tab streams in; wait for the finished one
-  await page.waitForFunction(() => !/Catching every note|Loading the models|tab ready up to|Paused while/.test(document.querySelector("[data-pane]")?.textContent ?? ""), null, { timeout: 300000 });
+  // the tab streams in; wait for the finished one (bars too, as the progress line can appear a moment after the page)
+  await page.waitForFunction(() => {
+    const pane = document.querySelector("[data-pane]");
+    return pane?.querySelector('[role="img"][aria-label^="Bar"]') && !/Catching every note|Loading the models|tab ready up to|Paused while/.test(pane.textContent ?? "");
+  }, null, { timeout: 300000 });
   const live = await count(20000);
   const secs = (Date.now() - t0) / 1000;
   if (!live.notes) throw new Error("tab has no notes");
