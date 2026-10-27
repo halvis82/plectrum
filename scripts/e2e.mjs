@@ -87,7 +87,7 @@ async function tabNotes(page) {
   // the tab streams in; wait for the finished one (bars too, as the progress line can appear a moment after the page)
   await page.waitForFunction(() => {
     const pane = document.querySelector("[data-pane]");
-    return pane?.querySelector('[role="img"][aria-label^="Bar"]') && !/Catching every note|Loading the models|tab ready up to|Paused while/.test(pane.textContent ?? "");
+    return pane?.querySelector('[role="img"][aria-label^="Bar"]') && !/Catching every note|Loading the models|ready up to|Paused while/.test(pane.textContent ?? "");
   }, null, { timeout: 300000 });
   const live = await count(20000);
   const secs = (Date.now() - t0) / 1000;
@@ -108,15 +108,15 @@ async function linkFlow(page, link, shot) {
   const secs = (Date.now() - t0) / 1000;
   await page.waitForSelector("figure", { timeout: 20000 });
   const audio = page.locator("audio");
-  await audio.waitFor({ timeout: 15000 });
-  await page.getByRole("button", { name: "Play" }).click();
+  await audio.waitFor({ state: "attached", timeout: 15000 });
+  await page.getByRole("button", { name: "Play", exact: true }).click();
   await page.waitForTimeout(5000);
   const t = await audio.evaluate((a) => a.currentTime);
   const marks = await page.locator(".bg-now:visible").count();
   await page.screenshot({ path: `${SHOTS}/${shot}-song.png` });
   if (t < 2) throw new Error(`audio not playing (t=${t})`);
   if (!marks) throw new Error("no beat highlight while playing");
-  await page.getByRole("button", { name: "Pause" }).click();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
   return `${secs.toFixed(1)}s paste-to-chords, plays from server (t=${t.toFixed(1)}s), ${await tabNotes(page)}, song ${id}`;
 }
 
@@ -162,7 +162,7 @@ await test("upload: file analyzed and saved, local playback", async () => {
   await page.setInputFiles('input[type="file"]', UPLOAD);
   const id = await songId(page);
   const secs = (Date.now() - t0) / 1000;
-  await page.waitForSelector("audio", { timeout: 15000 });
+  await page.waitForSelector("audio", { state: "attached", timeout: 15000 });
   const tab = await tabNotes(page);
   await page.screenshot({ path: `${SHOTS}/upload-song.png`, fullPage: false });
   if (errors.length) throw new Error("page errors: " + errors.join(" | "));
@@ -186,7 +186,7 @@ await test("song page on another device: play-along clock works", async () => {
   const upload = results.find((r) => r.name.startsWith("upload"))?.note?.match(/song (\w+)/)?.[1];
   const { page } = await newPage(true);
   await page.goto(`${BASE}/song/${upload ?? id}`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "Play" }).click();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
   await page.waitForTimeout(4000);
   const marks = await page.locator(".bg-now:visible").count();
   await page.screenshot({ path: `${SHOTS}/playalong.png` });

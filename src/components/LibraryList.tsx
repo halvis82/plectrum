@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { SongSummary } from "@/lib/server/db";
 
-const ICON: Record<string, string> = { youtube: "▶", spotify: "♫", apple: "♫", deezer: "♫", soundcloud: "☁", upload: "📁", record: "🎙️", tab: "▶" };
+const ICON: Record<string, string> = { youtube: "▶", spotify: "♫", apple: "♫", deezer: "♫", soundcloud: "☁", upload: "📁", record: "🎙️", tab: "▶", scratch: "✎" };
 
 export function LibraryList({ initial }: { initial: SongSummary[] }) {
   const [q, setQ] = useState("");

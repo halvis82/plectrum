@@ -5,7 +5,8 @@ import { capoOptions, chordName, detectKey, labelFromIndex, parseLabel, simplify
 
 export type Bar = { index: number; beats: number[]; pickup: boolean };
 
-export function buildBars(a: Analysis): Bar[] {
+/** `keepEmpty`: keep silent bars at the ends too (a song written from scratch starts empty). */
+export function buildBars(a: Analysis, keepEmpty = false): Bar[] {
   const bars: Bar[] = [];
   const n = a.beats.length;
   const range = (from: number, to: number) => Array.from({ length: Math.max(0, to - from) }, (_, k) => from + k);
@@ -17,8 +18,8 @@ export function buildBars(a: Analysis): Bar[] {
     const [from, to] = span(b);
     return b.beats.every((i) => parseLabel(labelFromIndex(a.chords[i])) === null) && !a.notes?.some(([t]) => t >= from && t < to);
   };
-  while (bars.length && isEmpty(bars[0])) bars.shift();
-  while (bars.length && isEmpty(bars[bars.length - 1])) bars.pop();
+  while (!keepEmpty && bars.length && isEmpty(bars[0])) bars.shift();
+  while (!keepEmpty && bars.length && isEmpty(bars[bars.length - 1])) bars.pop();
   // number full bars from 1 after trimming (a leading pickup keeps index 0)
   let num = 0;
   return bars.map((b) => ({ ...b, index: b.pickup ? 0 : ++num }));

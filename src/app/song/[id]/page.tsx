@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { SongHeader } from "@/components/SongHeader";
-import { SongView } from "@/components/SongView";
+import { SongView } from "@/components/song/SongView";
 import { getSong } from "@/lib/server/db";
 
 export async function generateMetadata({ params }: PageProps<"/song/[id]">): Promise<Metadata> {
@@ -18,7 +18,9 @@ async function Song({ params }: { params: PageProps<"/song/[id]">["params"] }) {
   return (
     <>
       <SongHeader id={song.id} title={song.title} artist={song.artist} />
-      <SongView song={song} />
+      <Suspense fallback={<div className="h-96" />}>
+        <SongView song={song} />
+      </Suspense>
     </>
   );
 }

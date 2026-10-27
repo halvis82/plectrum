@@ -5,10 +5,11 @@
 export function followInPane(el: HTMLElement) {
   const pane = el.closest<HTMLElement>("[data-pane]");
   if (!pane || Number(pane.dataset.touched ?? 0) > Date.now() - 4000) return;
-  // center it in the part of the pane that is on screen, below the sticky controls
+  // center it in the part of the pane that is on screen: below the sticky controls, above the player
   const box = pane.getBoundingClientRect();
   const controls = document.querySelector("[data-controls]")?.getBoundingClientRect().bottom ?? 0;
-  const from = Math.max(box.top, controls), to = Math.min(box.bottom, innerHeight);
+  const dock = document.querySelector("[data-dock]")?.getBoundingClientRect().top ?? innerHeight;
+  const from = Math.max(box.top, controls), to = Math.min(box.bottom, innerHeight, dock);
   if (to - from < 40) return;
   const r = el.getBoundingClientRect();
   pane.scrollBy({ top: r.top + r.height / 2 - (from + to) / 2, behavior: "smooth" });

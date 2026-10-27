@@ -55,3 +55,201 @@ button {
 button:disabled {
   cursor: default;
 }
+
+html {
+  scrollbar-color: color-mix(in oklab, var(--muted) 45%, transparent) transparent;
+  scrollbar-width: thin;
+  -webkit-text-size-adjust: 100%;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--muted) 40%, transparent) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted) 40%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted) 65%, transparent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* rows that scroll sideways (chord shapes, toolbars) hide their bar: swiping is the way to move */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+/* one focus look everywhere: an accent ring for keyboard focus only, never the browser's blue box */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 25%, transparent);
+}
+
+/* buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border-radius: 0.85rem;
+  padding: 0.7rem 1rem;
+  font-weight: 550;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--fg);
+  transition: background-color 0.15s, border-color 0.15s, transform 0.08s, opacity 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.btn:hover {
+  border-color: color-mix(in oklab, var(--accent) 60%, var(--line));
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.45;
+  transform: none;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-primary:hover {
+  border-color: var(--accent);
+  filter: brightness(1.06);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn-ghost:hover {
+  background: var(--surface-2);
+  border-color: transparent;
+}
+.btn-sm {
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.65rem;
+  font-size: 0.875rem;
+}
+.btn-icon {
+  padding: 0;
+  height: 2.5rem;
+  width: 2.5rem;
+  border-radius: 999px;
+}
+
+/* selects: native menus (best on phones) with a quiet chevron */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 0.65rem;
+  border: 1px solid var(--line);
+  background: var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23948b7e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 0.55rem center;
+  padding: 0.38rem 1.75rem 0.38rem 0.65rem;
+  color: var(--fg);
+}
+
+/* range sliders */
+input[type="range"].range {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  height: 1.75rem;
+  cursor: pointer;
+  --fill: 50%;
+}
+input[type="range"].range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) var(--fill), var(--surface-2) var(--fill));
+}
+input[type="range"].range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+input[type="range"].range::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+input[type="range"].range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 20px;
+  width: 20px;
+  margin-top: -7px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+input[type="range"].range::-moz-range-thumb {
+  height: 18px;
+  width: 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+}
+
+/* moving sheen on progress bars so a slow step still looks alive */
+.progress-shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 0.28) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: 999px;
+}
+@keyframes shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-shimmer {
+    animation: none;
+  }
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+/* parts of a song cut out by hand */
+.cut-hatch {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--muted) 30%, transparent) 0 4px, transparent 4px 8px);
+}

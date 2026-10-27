@@ -43,6 +43,8 @@ const GUITAR_WEIGHTS = "/model/guitar.v1.f16";
 
 let chords: Promise<{ session: ort.InferenceSession; basis: CqtBasis; meta: ModelMeta }> | null = null;
 let chordsReady = false;
+/** download progress of the chord model, 0..1 */
+let chordsLoaded = 0;
 let guitar: Promise<{ notes: ort.InferenceSession; strings: ort.InferenceSession }> | null = null;
 /** download progress of the note model's weights, 0..1 */
 let guitarLoaded = 0;
@@ -52,7 +54,7 @@ let guitarReady = false;
 function loadChords() {
   chords ??= (async () => {
     const [model, basisBuf, meta] = await Promise.all([
-      fetch("/model/btc170.v1.onnx").then((r) => r.arrayBuffer()),
+      download("/model/btc170.v1.onnx", (p) => (chordsLoaded = p)),
       fetch("/model/cqt_basis.v1.bin").then((r) => r.arrayBuffer()),
       fetch("/model/btc170.v1.json").then((r) => r.json() as Promise<ModelMeta>),
     ]);
@@ -152,8 +154,10 @@ async function handle(req: WorkerRequest) {
       return post({ id: req.id, type: "loaded" });
     }
     if (req.type === "notes") return await notes(req);
-    if (!chordsReady) post({ id: req.id, type: "progress", stage: "model", p: 0 });
-    const { session, basis, meta } = await loadChords();
+    // first time only: report the chord model's download while it comes in
+    const loading = chordsReady ? 0 : setInterval(() => post({ id: req.id, type: "progress", stage: "model", p: chordsLoaded }), 400);
+    if (!chordsReady) post({ id: req.id, type: "progress", stage: "model", p: chordsLoaded });
+    const { session, basis, meta } = await loadChords().finally(() => clearInterval(loading));
     const run = async (x: Float32Array) => {
       const out = await session.run({ x: new ort.Tensor("float32", x, [1, FRAMES_PER_CHUNK, N_BINS]) });
       return out.logp.data as Float32Array;

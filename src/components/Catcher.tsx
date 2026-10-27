@@ -28,7 +28,25 @@ type Card = { title: string; artist: string | null; image: string | null; note?:
 type Phase =
   | { kind: "idle" }
   | { kind: "listening"; t: number; level: number; waiting: boolean }
-  | { kind: "working"; label: string; p?: number };
+  | { kind: "working"; flow: Flow; step: StepKey; p?: number; stepStart: number; start: number };
+
+/** Every step a song can go through, in order, with its share of the progress bar. */
+const STEPS = {
+  find: { label: "Finding the song", weight: 4 },
+  audio: { label: "Getting the audio", weight: 25 },
+  read: { label: "Reading the audio", weight: 5 },
+  prepare: { label: "Preparing the recording", weight: 3 },
+  model: { label: "Loading the chord model (first time only)", weight: 10 },
+  features: { label: "Listening to the harmony", weight: 30 },
+  chords: { label: "Recognizing chords", weight: 8 },
+  beats: { label: "Finding the beat", weight: 6 },
+  save: { label: "Saving to the library", weight: 4 },
+} as const;
+type StepKey = keyof typeof STEPS;
+type Flow = StepKey[];
+const LINK_FLOW: Flow = ["find", "audio", "read", "model", "features", "chords", "beats", "save"];
+const FILE_FLOW: Flow = ["read", "model", "features", "chords", "beats", "save"];
+const MIC_FLOW: Flow = ["prepare", "model", "features", "chords", "beats", "save"];
 
 const STAGE_LABEL: Record<Stage, string> = {
   model: "Loading the models (first time only)",
@@ -61,6 +79,52 @@ export function Catcher() {
   const lastLink = useRef("");
   const fileInput = useRef<HTMLInputElement>(null);
   const busy = phase.kind !== "idle";
+  /** what "Try again" repeats */
+  const retryRef = useRef<(() => void) | null>(null);
+
+  /** Moves the progress to a step (or updates the current step's share when it is the same one). */
+  const step = (flow: Flow, key: StepKey, p?: number) =>
+    setPhase((ph) => {
+      const now = Date.now();
+      const same = ph.kind === "working" && ph.step === key;
+      const start = ph.kind === "working" ? ph.start : now;
+      // a step can be skipped (the model is already loaded) but the bar never moves back
+      if (ph.kind === "working" && flow.indexOf(key) < flow.indexOf(ph.step)) return ph;
+      return { kind: "working", flow, step: key, p, stepStart: same ? ph.stepStart : now, start };
+    });
+
+  /** Back to an empty catcher, ready for the next song. */
+  const reset = () => {
+    stopRef.current = null;
+    cancelRef.current = null;
+    retryRef.current = null;
+    setLive(null);
+    setPhase({ kind: "idle" });
+    setSong(null);
+    setError(null);
+    setUrl("");
+    lastLink.current = "";
+  };
+  const go = (path: string) => {
+    reset();
+    router.push(path);
+  };
+  // this page is kept while a song is open, so "New song" (see NewSongButton) starts it clean unless a
+  // song is still being worked on
+  const idle = phase.kind === "idle";
+  useEffect(() => {
+    const clean = () => {
+      if (!idle) return;
+      setUrl("");
+      setSong(null);
+      setError(null);
+      lastLink.current = "";
+      retryRef.current = null;
+      if (fileInput.current) fileInput.current.value = "";
+    };
+    window.addEventListener("cc:new-song", clean);
+    return () => window.removeEventListener("cc:new-song", clean);
+  }, [idle]);
 
   /** The chord model starts loading in the background and is cached afterwards. */
   const getAnalyzer = () => {
@@ -74,9 +138,10 @@ export function Catcher() {
     idle(() => sharedAnalyzer());
   }, []);
 
-  function fail(message: string) {
+  function fail(message: string, retry?: () => void) {
     stopRef.current = null;
     cancelRef.current = null;
+    retryRef.current = retry ?? null;
     setLive(null);
     setPhase({ kind: "idle" });
     setError(message);
@@ -89,26 +154,27 @@ export function Catcher() {
     setError(null);
     setSong(null);
     getAnalyzer();
-    setPhase({ kind: "working", label: "Finding the song" });
+    const F = LINK_FLOW;
+    step(F, "find");
     try {
       let r = await fetch(`/api/resolve?url=${encodeURIComponent(link.trim())}`);
       let resolved: Resolved = await r.json();
       if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
-      if (resolved.existing) return router.push(`/song/${resolved.existing}`);
-      const progress = (p: number) => setPhase({ kind: "working", label: "Getting the audio", p });
+      if (resolved.existing) return go(`/song/${resolved.existing}`);
+      const progress = (p: number) => step(F, "audio", p);
 
       // any other site: the server downloads it with yt-dlp
       let site: string | null = null;
       if (resolved.kind === "web") {
-        setPhase({ kind: "working", label: "Getting the audio" });
+        step(F, "audio");
         const got = await download(`/api/media?url=${encodeURIComponent(resolved.sourceUrl)}`, progress);
         if ("blob" in got) {
           const m = got.meta!;
           setSong({ title: m.title, artist: m.artist, image: thumb(m.thumbnail) });
-          setPhase({ kind: "working", label: "Reading the audio" });
+          step(F, "read");
           const samples = await decodeToMono(got.blob);
           const page = m.page ?? resolved.sourceUrl;
-          return await finish(samples, { title: m.title, artist: m.artist, source: sourceOf(m.site), sourceUrl: page, audioUrl: page }, got.blob);
+          return await finish(F, samples, { title: m.title, artist: m.artist, source: sourceOf(m.site), sourceUrl: page, audioUrl: page }, got.blob);
         }
         // copy-protected there (official SoundCloud uploads): find the same song on YouTube
         if (!got.song) throw new Error(got.error);
@@ -117,7 +183,7 @@ export function Catcher() {
         r = await fetch(`/api/resolve?${q}`);
         resolved = await r.json();
         if (!r.ok) throw new Error((resolved as unknown as { error: string }).error);
-        if (resolved.existing) return router.push(`/song/${resolved.existing}`);
+        if (resolved.existing) return go(`/song/${resolved.existing}`);
       }
 
       const ytImage = (id: string | null) => (id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : null);
@@ -139,7 +205,7 @@ export function Catcher() {
 
       // YouTube refused every upload: use a full-length copy from SoundCloud instead
       if (!audio) {
-        setPhase({ kind: "working", label: "Looking for another copy" });
+        step(F, "audio", 0.5);
         const q = new URLSearchParams({ q: `${resolved.artist ?? ""} ${resolved.title}`.trim(), title: resolved.title });
         if (resolved.artist) q.set("artist", resolved.artist);
         if (resolved.duration) q.set("duration", String(resolved.duration));
@@ -156,12 +222,20 @@ export function Catcher() {
         });
       }
 
-      setPhase({ kind: "working", label: "Reading the audio" });
-      const samples = await decodeToMono(audio);
-      await finish(samples, meta, meta.audioUrl ? audio : undefined);
+      step(F, "read");
+      let samples: Float32Array;
+      try {
+        samples = await decodeToMono(audio);
+      } catch {
+        throw new Error("The audio came through but couldn't be read in this browser. Try again, or try another link.");
+      }
+      await finish(F, samples, meta, meta.audioUrl ? audio : undefined);
     } catch (e) {
       setSong(null);
-      fail(e instanceof Error ? e.message : String(e));
+      fail(e instanceof Error ? e.message : String(e), () => {
+        lastLink.current = "";
+        void catchLink(link);
+      });
     }
   }
 
@@ -169,17 +243,19 @@ export function Catcher() {
   async function handleFile(file: File | undefined) {
     if (!file || busy) return;
     setError(null);
-    setSong(null);
+    const base = file.name.replace(/\.[^.]+$/, "").replace(/_/g, " ");
+    const m = base.match(/^(.+?)\s+-\s+(.+)$/);
+    setSong({ title: m ? m[2] : base, artist: m ? m[1] : null, image: null });
     getAnalyzer();
-    setPhase({ kind: "working", label: "Reading the file" });
+    step(FILE_FLOW, "read");
+    let samples: Float32Array;
     try {
-      const samples = await decodeToMono(file);
-      const base = file.name.replace(/\.[^.]+$/, "").replace(/_/g, " ");
-      const m = base.match(/^(.+?)\s+-\s+(.+)$/);
-      await finish(samples, { title: m ? m[2] : base, artist: m ? m[1] : null, source: "upload" }, file);
-    } catch (e) {
-      fail(e instanceof Error && !/decod/i.test(e.message) ? e.message : "Couldn't read that file. Try an mp3, m4a, wav or a video file.");
+      samples = await decodeToMono(file);
+    } catch {
+      setSong(null);
+      return fail("Couldn't read that file. Try an mp3, m4a, wav or a video file.");
     }
+    await finish(FILE_FLOW, samples, { title: m ? m[2] : base, artist: m ? m[1] : null, source: "upload" }, file);
   }
 
   // ---- listen through the mic, with chords appearing live ----
@@ -199,10 +275,17 @@ export function Catcher() {
     setLive({ ...liveState });
     let stopped = false;
     const poll = setInterval(() => setPhase({ kind: "listening", t: pcm.seconds, level: pcm.level(), waiting: pcm.firstSound < 0 }), 100);
+    // one live update at a time: on a slow phone they would otherwise queue up in the worker, and the
+    // song's own analysis would wait behind all of them
+    let inFlight = false;
     const liveTimer = setInterval(async () => {
-      if (pcm.seconds < 2 || pcm.firstSound < 0) return;
+      if (pcm.seconds < 2 || pcm.firstSound < 0 || inFlight) return;
+      inFlight = true;
       const { pcm: tail, start } = pcm.tail(10);
-      const res = await an.live(await resample(tail, pcm.sampleRate, SR)).catch(() => null);
+      const res = await an
+        .live(await resample(tail, pcm.sampleRate, SR))
+        .catch(() => null)
+        .finally(() => (inFlight = false));
       if (!res || stopped) return;
       res.frames.forEach((cls, i) => {
         // the first second of a window has no left context; an earlier window covered it
@@ -220,11 +303,12 @@ export function Catcher() {
       if (stopped) return;
       stopped = true;
       cleanup();
-      setPhase({ kind: "working", label: "Finishing up" });
+      step(MIC_FLOW, "prepare");
       const samples = await resample(pcm.stop(), pcm.sampleRate, SR);
+      setLive(null);
       const now = new Date();
       const title = `Recording ${now.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
-      await finish(samples, { title, artist: null, source: "record" }, encodeWav(samples, SR));
+      await finish(MIC_FLOW, samples, { title, artist: null, source: "record" }, encodeWav(samples, SR));
     };
     cancelRef.current = () => {
       stopped = true;
@@ -235,7 +319,7 @@ export function Catcher() {
     };
   }
 
-  async function finish(samples: Float32Array, meta: Meta, localAudio?: Blob) {
+  async function finish(flow: Flow, samples: Float32Array, meta: Meta, localAudio?: Blob) {
     try {
       let peak = 0;
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
@@ -243,9 +327,9 @@ export function Catcher() {
       if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
       // the song opens as soon as its chords are in; its page then shows the tab filling in
       const an = getAnalyzer();
-      const pass = await an.chords(samples, (stage, p) => setPhase({ kind: "working", label: STAGE_LABEL[stage], p }));
+      const pass = await an.chords(samples, (stage, p) => stage !== "notes" && stage !== "paused" && step(flow, stage, p));
       const analysis = pass.result;
-      setPhase({ kind: "working", label: "Saving to the library" });
+      step(flow, "save");
       const res = await fetch("/api/songs", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -274,13 +358,10 @@ export function Catcher() {
         .catch((e) => setPending(id, { error: `The notes couldn't be worked out: ${e instanceof Error ? e.message : e}` }));
       if (localAudio) await saveLocalAudio(id, localAudio);
       // this page is kept for the way back ("New song"), so leave it ready for the next one
-      setPhase({ kind: "idle" });
-      setSong(null);
-      setUrl("");
-      lastLink.current = "";
-      router.push(`/song/${id}`);
+      go(`/song/${id}`);
     } catch (e) {
-      fail(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      fail(msg === "stalled" ? "The analysis got stuck twice, which usually means this device is short on memory. Close other tabs and try again." : msg, () => void finish(flow, samples, meta, localAudio));
     }
   }
 
@@ -397,24 +478,75 @@ export function Catcher() {
         </div>
       )}
 
-      {working && (
-        <div className="mt-5" aria-live="polite">
-          <div className="flex justify-between text-sm mb-1.5">
-            <span className="font-medium">{working.label}…</span>
-            {working.p !== undefined && <span className="text-muted tabular-nums">{Math.round(working.p * 100)}%</span>}
-          </div>
-          <div className="h-2 rounded-full bg-surface-2 overflow-hidden">
-            <div
-              className={`h-full bg-accent transition-[width] duration-300 ${working.p === undefined ? "animate-pulse w-full" : ""}`}
-              style={working.p !== undefined ? { width: `${Math.max(3, working.p * 100)}%` } : undefined}
-            />
-          </div>
+      {working && <Progress phase={working} />}
+      {error && (
+        <div className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="flex-1 min-w-48">{error}</span>
+          {retryRef.current && (
+            <button onClick={() => retryRef.current?.()} className="btn btn-primary btn-sm">
+              Try again
+            </button>
+          )}
         </div>
       )}
-      {error && <p className="mt-4 text-sm rounded-xl bg-accent-soft px-3 py-2.5">{error}</p>}
     </section>
   );
 }
+
+/** One bar for the whole job: finished steps fill their share, the current step its progress (or, when
+ * it can't be measured, creeps on with time so it never looks frozen), with the steps listed below. */
+function Progress({ phase }: { phase: Extract<Phase, { kind: "working" }> }) {
+  const [now, setNow] = useState(phase.stepStart);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  const at = phase.flow.indexOf(phase.step);
+  const total = phase.flow.reduce((a, k) => a + STEPS[k].weight, 0);
+  const done = phase.flow.slice(0, at).reduce((a, k) => a + STEPS[k].weight, 0);
+  const inStep = phase.p ?? 0.9 * (1 - Math.exp(-Math.max(0, now - phase.stepStart) / 6000));
+  const overall = (done + STEPS[phase.step].weight * Math.min(1, inStep)) / total;
+  const secs = Math.max(0, Math.floor((now - phase.start) / 1000));
+  return (
+    <div className="mt-5" aria-live="polite">
+      <div className="flex items-baseline justify-between gap-3 text-sm mb-2">
+        <span className="font-medium">
+          {STEPS[phase.step].label}
+          {phase.p !== undefined && <span className="text-muted tabular-nums"> {Math.round(phase.p * 100)}%</span>}
+        </span>
+        <span className="text-muted tabular-nums shrink-0">
+          {Math.round(overall * 100)}% · {fmt(secs)}
+        </span>
+      </div>
+      <div className="relative h-2.5 rounded-full bg-surface-2 overflow-hidden">
+        <div className="absolute inset-y-0 left-0 rounded-full bg-accent transition-[width] duration-500 ease-out" style={{ width: `${Math.max(2, overall * 100)}%` }} />
+        <div className="absolute inset-y-0 left-0 progress-shimmer" style={{ width: `${Math.max(2, overall * 100)}%` }} />
+      </div>
+      <ol className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+        {phase.flow.map((k, i) => (
+          <li key={k} className={`flex items-center gap-1 ${i === at ? "text-fg font-medium" : ""}`}>
+            <span aria-hidden className={`grid place-items-center h-3.5 w-3.5 rounded-full text-[9px] ${i < at ? "bg-accent text-accent-fg" : i === at ? "border-2 border-accent" : "border border-line"}`}>
+              {i < at ? "✓" : ""}
+            </span>
+            {SHORT[k]}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+const SHORT: Record<StepKey, string> = {
+  find: "Find",
+  audio: "Download",
+  read: "Read",
+  prepare: "Prepare",
+  model: "Model",
+  features: "Harmony",
+  chords: "Chords",
+  beats: "Beat",
+  save: "Save",
+};
 
 /** Other sites' cover art goes through this origin (see /api/thumb). */
 const thumb = (url: string | null) => (url ? `/api/thumb?u=${encodeURIComponent(url)}` : null);

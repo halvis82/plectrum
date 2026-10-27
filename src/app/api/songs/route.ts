@@ -2,6 +2,7 @@ import { randomBytes } from "crypto";
 import { customAlphabet } from "nanoid";
 import { listSongs, sql } from "@/lib/server/db";
 import { validAnalysis } from "@/lib/analysis/validate";
+import { validEdits } from "@/lib/edits";
 
 const newId = customAlphabet("23456789abcdefghjkmnpqrstuvwxyz", 10);
 
@@ -32,6 +33,9 @@ export async function POST(req: Request) {
   const songKey = str(body.key, 20);
   if (!source || !validAnalysis(body.analysis)) return Response.json({ error: "Invalid analysis" }, { status: 400 });
   const a = body.analysis;
+  // a song started from scratch arrives with its tempo grid and an empty tab
+  const edits = body.edits === undefined ? null : validEdits(body.edits) ? body.edits : undefined;
+  if (edits === undefined) return Response.json({ error: "Invalid edits" }, { status: 400 });
   const id = newId();
   // songs arrive with their chords first; the browser that made one adds the notes with this key
   const editKey = a.notes ? null : randomBytes(18).toString("base64url");
@@ -40,7 +44,7 @@ export async function POST(req: Request) {
     await sql`delete from songs where (youtube_id = ${youtubeId} or source_url = ${sourceUrl})
       and analysis->'notes' is null and (edit_key is null or created_at < now() - interval '1 hour')`;
   }
-  await sql`insert into songs (id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, edit_key)
-    values (${id}, ${title}, ${artist}, ${source}, ${sourceUrl}, ${youtubeId}, ${audioUrl}, ${a.duration}, ${a.bpm}, ${a.meter}, ${songKey}, ${JSON.stringify(a)}, ${editKey})`;
+  await sql`insert into songs (id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, edit_key, edits)
+    values (${id}, ${title}, ${artist}, ${source}, ${sourceUrl}, ${youtubeId}, ${audioUrl}, ${a.duration}, ${a.bpm}, ${a.meter}, ${songKey}, ${JSON.stringify(a)}, ${editKey}, ${edits ? JSON.stringify(edits) : null})`;
   return Response.json({ id, editKey });
 }

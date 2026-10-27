@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { Catcher } from "@/components/Catcher";
 import { Library } from "@/components/Library";
+import { ScratchButton } from "@/components/ScratchButton";
 
 export default function Home() {
   return (
@@ -11,6 +12,7 @@ export default function Home() {
       </section>
       <div className="max-w-2xl">
         <Catcher />
+        <ScratchButton />
       </div>
       <section className="mt-12">
         <h2 className="text-xl font-semibold mb-3">Library</h2>

@@ -1,8 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 import { Suspense } from "react";
-import { NewSongButton } from "@/components/NewSongButton";
+import { HomeLink, NewSongButton } from "@/components/NewSongButton";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -26,17 +25,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col font-sans">
         <header className="mx-auto w-full max-w-5xl px-4 pt-5 pb-3 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 font-bold text-lg tracking-tight">
+          <HomeLink>
             <Logo />
             ChordCatch
-          </Link>
+          </HomeLink>
           <Suspense fallback={null}>
             <NewSongButton />
           </Suspense>
         </header>
         <main className="mx-auto w-full max-w-5xl px-4 pb-16 flex-1">{children}</main>
         <footer className="mx-auto w-full max-w-5xl px-4 py-6 text-xs text-muted">
-          Chords and notes are recognized from the audio itself, in your browser, with the open BTC (ISMIR 2019) and Riley et al. guitar transcription (ICASSP 2024) models, plus a string model trained on GuitarSet and EGDB. Lyrics from LRCLIB.
+          Chords and notes are recognized from the audio itself, in your browser, with the open BTC (ISMIR 2019) and Riley et al. guitar transcription (ICASSP 2024) models, plus a string model trained on GuitarSet, EGDB and Guitar-TECHS. Lyrics from LRCLIB, the video&apos;s captions, or Whisper listening in your browser.
         </footer>
       </body>
     </html>
