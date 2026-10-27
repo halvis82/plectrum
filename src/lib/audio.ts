@@ -3,6 +3,7 @@
 
 import type { Analysis, NoteRow } from "./analysis/analyze";
 import type { WorkerMessage, WorkerRequest } from "./analysis/worker-shared";
+import { logEvent } from "./log";
 
 export const SR = 22050;
 
@@ -36,19 +37,28 @@ export type Stage = "model" | "features" | "chords" | "beats" | "notes" | "pause
 
 /** One analysis worker (see analysis/worker.ts): requests are numbered and answered in order. A worker
  * that crashes (out of memory, say) fails its requests and is replaced on the next call. */
+const CRASHED = "The analysis stopped unexpectedly (the device may be low on memory)";
+
 class WorkerLink {
   private worker: Worker | null = null;
-  constructor(private spawn: () => Worker) {}
+  constructor(
+    private spawn: () => Worker,
+    private label: string,
+  ) {}
   private next = 1;
   private pending = new Map<number, { onMsg: (m: WorkerMessage) => void; reject: (e: Error) => void }>();
+  /** the worker's script ran (it says so with message 0) */
+  private started = false;
 
   private get w(): Worker {
     if (!this.worker) {
       const w = this.spawn();
-      w.onmessage = (e: MessageEvent<WorkerMessage>) => this.pending.get(e.data.id)?.onMsg(e.data);
+      this.started = false;
+      w.onmessage = (e: MessageEvent<WorkerMessage>) => (e.data.id === 0 ? (this.started = true) : this.pending.get(e.data.id)?.onMsg(e.data));
       w.onerror = (e) => {
         e.preventDefault?.();
-        this.restart(new Error("The analysis stopped unexpectedly (the device may be low on memory)"));
+        logEvent("worker-crash", { worker: this.label, started: this.started, message: String(e.message ?? "").slice(0, 300), at: `${e.filename ?? ""}:${e.lineno ?? ""}`.slice(-120), pending: this.pending.size });
+        this.restart(new Error(CRASHED));
       };
       this.worker = w;
     }
@@ -106,39 +116,51 @@ export type ChordPass = Extract<WorkerMessage, { type: "chords" }>;
  * much larger note model only once `prefetch()` says a song is actually on its way. */
 export class Analyzer {
   // (each `new URL(...)` has to be written out for the bundler to find the worker)
-  private chordsWorker = new WorkerLink(() => new Worker(new URL("./analysis/chords.worker.ts", import.meta.url), { type: "module" }));
-  private notesWorker = new WorkerLink(() => new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" }));
+  private chordsWorker = new WorkerLink(() => new Worker(new URL("./analysis/chords.worker.ts", import.meta.url), { type: "module" }), "chords");
+  /** one thread: less memory, and no helper workers that could fail to start */
+  private singleWorker = new WorkerLink(() => new Worker(new URL("./analysis/chords.worker.ts", import.meta.url), { type: "module", name: "single" }), "chords-single");
+  private notesWorker = new WorkerLink(() => new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module" }), "notes");
+  private notesSingle = new WorkerLink(() => new Worker(new URL("./analysis/worker.ts", import.meta.url), { type: "module", name: "single" }), "notes-single");
   readonly ready: Promise<void>;
 
   constructor() {
     this.ready = this.chordsWorker.call({ type: "load" }).then(() => undefined);
   }
 
-  /** Chords and beats of a whole song, in seconds. */
+  /** Chords and beats of a whole song, in seconds. A worker that crashes or goes quiet for a minute is
+   * replaced by a single-threaded one, and if that fails too the page works them out itself. */
   async chords(samples: Float32Array, onProgress?: (stage: Stage, p: number) => void): Promise<ChordPass> {
-    // the worker reports progress every few seconds; a minute of silence means it is stuck, and a
-    // fresh worker gets one more try
-    for (let attempt = 0; ; attempt++) {
+    const progress = (stage: Stage, p: number) => onProgress?.(stage, p);
+    for (const link of [this.chordsWorker, this.singleWorker]) {
       try {
-        const m = await this.chordsWorker.call({ type: "chords", samples }, (m) => m.type === "progress" && onProgress?.(m.stage, m.p), 60_000);
+        const m = await link.call({ type: "chords", samples }, (m) => m.type === "progress" && progress(m.stage, m.p), 60_000);
         if (m.type !== "chords") throw new Error("Unexpected worker reply");
         return m;
       } catch (e) {
-        if (attempt > 0) throw e;
+        logEvent("chords-retry", { worker: link === this.chordsWorker ? "chords" : "chords-single", error: String(e instanceof Error ? e.message : e).slice(0, 200) });
       }
     }
+    const { chordEngine } = await import("./analysis/chord-engine");
+    const pass = await chordEngine(1).chords(samples, progress);
+    return { id: 0, type: "chords", ...pass };
   }
 
   /** The tab, with the chords decided again from its notes. `onPartial` gets the tab so far every few
    * seconds. The newest song's tab goes first; older ones pause (stage "paused") until it is done. */
   async tab(samples: Float32Array, pass: ChordPass, on: { progress?: (stage: Stage, p: number) => void; partial?: (notes: NoteRow[], upTo: number) => void } = {}): Promise<Analysis> {
-    const m = await this.notesWorker.call(
-      { type: "notes", samples, frames: pass.frames, rhythm: pass.rhythm },
-      (m) => {
-        if (m.type === "progress") on.progress?.(m.stage, m.p);
-        else if (m.type === "partial") on.partial?.(m.notes, m.upTo);
-      },
-    );
+    const onMsg = (m: WorkerMessage) => {
+      if (m.type === "progress") on.progress?.(m.stage, m.p);
+      else if (m.type === "partial") on.partial?.(m.notes, m.upTo);
+    };
+    const req = { type: "notes", samples, frames: pass.frames, rhythm: pass.rhythm } as const;
+    let m: WorkerMessage;
+    try {
+      m = await this.notesWorker.call(req, onMsg);
+    } catch (e) {
+      // a crash gets one more try in a fresh single-threaded worker; a reported error is final
+      if (!(e instanceof Error) || e.message !== CRASHED) throw e;
+      m = await this.notesSingle.call(req, onMsg);
+    }
     if (m.type !== "done") throw new Error("Unexpected worker reply");
     return m.result;
   }
@@ -155,8 +177,7 @@ export class Analyzer {
   }
 
   terminate() {
-    this.chordsWorker.terminate();
-    this.notesWorker.terminate();
+    for (const w of [this.chordsWorker, this.singleWorker, this.notesWorker, this.notesSingle]) w.terminate();
   }
 }
 

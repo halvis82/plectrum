@@ -15,8 +15,9 @@ export type { WorkerMessage, WorkerRequest } from "./worker-shared";
 
 // served from this site by scripts/copy-ort.mjs
 ort.env.wasm.wasmPaths = `/ort/${ort.env.versions.web}/`;
-// threads need cross-origin isolation (COOP/COEP headers, see next.config.ts)
-ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+// threads need cross-origin isolation (COOP/COEP headers, see next.config.ts); a worker started with the
+// name "single" (the retry after a crash) uses one, which needs the least memory
+ort.env.wasm.numThreads = self.crossOriginIsolated && self.name !== "single" ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
 
 const GUITAR_MODEL = "/model/guitar.v1.onnx";
 const GUITAR_WEIGHTS = "/model/guitar.v1.f16";
@@ -144,3 +145,6 @@ async function tab(req: Extract<WorkerRequest, { type: "notes" }>) {
   const h = await heard(acts);
   post({ id: req.id, type: "done", result: withNotes({ frames: req.frames, rhythm: req.rhythm, duration: y.length / SR }, h.notes, h.probs) });
 }
+
+// the page knows the worker started (an error before this means it never could)
+postMessage({ id: 0, type: "loaded" } satisfies WorkerMessage);
