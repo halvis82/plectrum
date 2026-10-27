@@ -110,9 +110,10 @@ export function Player({
             </button>
             <button
               onClick={() => (st.playing ? transport.pause() : void transport.play())}
-              className="btn btn-primary btn-icon h-11 w-11 shadow"
+              className="relative btn btn-primary btn-icon h-11 w-11 shadow"
               aria-label={st.playing ? "Pause" : "Play"}
             >
+              {st.buffering && <span className="absolute -inset-1 rounded-full border-2 border-accent border-t-transparent animate-spin" aria-hidden />}
               {st.playing ? (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                   <rect x="6" y="4" width="4" height="16" rx="1.2" />
@@ -124,8 +125,14 @@ export function Player({
                 </svg>
               )}
             </button>
-            <span className="text-sm tabular-nums text-muted min-w-0 truncate">
-              <span className="text-fg">{clock(t)}</span> / {clock(duration)}
+            <span className="text-sm tabular-nums text-muted min-w-0 truncate" aria-live="polite">
+              {st.buffering ? (
+                "Loading audio…"
+              ) : (
+                <>
+                  <span className="text-fg">{clock(t)}</span> / {clock(duration)}
+                </>
+              )}
             </span>
             <span className="flex-1" />
             <button onClick={() => setMenu(menu === "speed" ? null : "speed")} className={`btn btn-sm ${st.rate !== 1 ? "btn-primary" : ""}`} aria-label="Speed" aria-expanded={menu === "speed"}>

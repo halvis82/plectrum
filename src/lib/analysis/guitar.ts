@@ -20,6 +20,10 @@ export type GuitarActivations = { onset: Float32Array; offset: Float32Array; fra
 export type GuitarNoteOptions = { onset: number; offset: number; frame: number };
 /** Reference thresholds, except onset 0.4 (slightly better on GuitarSet players 00-02, fewer stray notes). */
 export const DEFAULT_GUITAR_NOTES: GuitarNoteOptions = { onset: 0.4, offset: 0.3, frame: 0.1 };
+/** The tab keeps every note down to this onset confidence; the page's slider decides how many show.
+ * Ranking notes by onset confidence beat every other measure tried (loudness against neighbours,
+ * classifiers over a dozen features) on held-out GuitarSet, EGDB, Guitar-TECHS and band mixes. */
+export const CANDIDATE_ONSET = 0.2;
 
 /** Windowed-sinc (Kaiser) resampler for rational rate changes such as 22.05 -> 16 kHz, with one
  * precomputed filter per output phase. */
@@ -154,8 +158,18 @@ export function decodeGuitarNotes(a: GuitarActivations, o: GuitarNoteOptions = D
     let bgn: number | null = null;
     let disappear: number | null = null;
     let offOccur: number | null = null;
-    const push = (b: number, fin: number, offShift: number) =>
-      notes.push({ start: (b + onset.shift[b * P + k]) / FPS, end: (fin + offShift) / FPS, midi: k + BEGIN_NOTE, amp: a.velocity[b * P + k] });
+    const push = (b: number, fin: number, offShift: number) => {
+      let fr = 0;
+      for (let j = b; j <= fin; j++) fr += a.frame[j * P + k];
+      notes.push({
+        start: (b + onset.shift[b * P + k]) / FPS,
+        end: (fin + offShift) / FPS,
+        midi: k + BEGIN_NOTE,
+        amp: a.velocity[b * P + k],
+        on: Math.max(a.onset[b * P + k], a.onset[(b + 1) * P + k] ?? 0, b > 0 ? a.onset[(b - 1) * P + k] : 0),
+        fr: fr / Math.max(1, fin - b + 1),
+      });
+    };
     for (let i = 0; i < T; i++) {
       if (onset.on[i * P + k]) {
         // the reference treats frame 0 as "no onset" (a falsy index); kept for parity

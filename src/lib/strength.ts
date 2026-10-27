@@ -54,3 +54,22 @@ export function filterByDetail(notes: NoteRow[], strength: Float32Array, detail:
   const cut = sorted[Math.min(sorted.length - 1, Math.floor((1 - keep) * sorted.length))];
   return notes.filter((_, i) => strength[i] >= cut);
 }
+
+/** Songs analyzed since the slider existed carry each note's onset confidence (column 11). */
+export const hasConfidence = (rows: NoteRow[] | null | undefined) => !!rows?.length && rows[0].length >= 11;
+
+/** Slider (0 only the clearest notes, 1 everything heard) to an onset confidence cutoff. */
+export const cutoffFor = (detail: number) => 0.85 - 0.65 * detail;
+/** where the slider starts: onset confidence 0.5, which on held-out GuitarSet, phone recordings and band
+ * mixes kept as much of the music as 0.4 (the model's own setting) with fewer stray notes */
+export const DEFAULT_DETAIL = (0.85 - 0.5) / 0.65;
+
+/** The notes to show for a slider value: by onset confidence when the song has it, else by the loudness
+ * ranking above. */
+export function notesForDetail(rows: NoteRow[], detail: number, strength: Float32Array | null): NoteRow[] {
+  if (hasConfidence(rows)) {
+    const cut = cutoffFor(detail);
+    return rows.filter((r) => r[10] >= cut);
+  }
+  return strength ? filterByDetail(rows, strength, detail) : rows;
+}

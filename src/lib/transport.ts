@@ -5,7 +5,8 @@
 import { GuitarSynth } from "./synth";
 
 export type SynthNote = { t: number; end: number; midi: number; gain: number; soft: boolean };
-export type TransportState = { playing: boolean; rate: number; audio: boolean; guitar: boolean; click: boolean; hasMedia: boolean };
+/** `buffering`: playing, but the song's audio is still on its way */
+export type TransportState = { playing: boolean; rate: number; audio: boolean; guitar: boolean; click: boolean; hasMedia: boolean; buffering: boolean };
 
 const LOOKAHEAD = 0.3; // seconds of real time scheduled ahead
 
@@ -41,7 +42,7 @@ export class Transport {
     private meter: number,
     private downbeat: number,
   ) {
-    this.snapshot = { playing: false, rate: 1, audio: true, guitar: false, click: false, hasMedia: false };
+    this.snapshot = { playing: false, rate: 1, audio: true, guitar: false, click: false, hasMedia: false, buffering: false };
   }
 
   // ---- state for React (useSyncExternalStore) ----
@@ -68,6 +69,8 @@ export class Transport {
     if (el) {
       el.preservesPitch = true;
       el.onended = () => this.pause();
+      el.onwaiting = () => this.snapshot.playing && this.set({ buffering: true });
+      el.onplaying = () => this.set({ buffering: false });
       if (Math.abs(el.currentTime - t) > 0.5 && el.readyState > 0) el.currentTime = t;
     }
     this.set({ hasMedia: !!el });
@@ -104,7 +107,7 @@ export class Transport {
   };
 
   async play() {
-    if (this.snapshot.playing) return;
+    if (this.snapshot.playing && !this.snapshot.buffering) return;
     this.ctx ??= new AudioContext({ latencyHint: "interactive" });
     void this.ctx.resume();
     this.synth ??= new GuitarSynth(this.ctx);
@@ -117,12 +120,14 @@ export class Transport {
       m.playbackRate = this.snapshot.rate;
       m.muted = !this.snapshot.audio;
       if (Math.abs(m.currentTime - t) > 0.01) m.currentTime = t;
+      if (m.readyState < 3) this.set({ playing: true, buffering: true });
       try {
         await m.play();
       } catch {
         // the browser blocked it or the stream failed: run on our own clock instead
         this.setMedia(null);
       }
+      this.set({ buffering: m.readyState < 3 && !m.paused });
     }
     this.pos = t;
     this.startedAt = performance.now();
@@ -139,7 +144,7 @@ export class Transport {
     this.media?.pause();
     clearInterval(this.timer);
     this.stopScheduled();
-    this.set({ playing: false });
+    this.set({ playing: false, buffering: false });
   }
 
   seek(t: number) {

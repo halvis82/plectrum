@@ -52,13 +52,17 @@ await test("song page: player plays and the clock moves", async () => {
   const { p, errors } = await page({ dark: true });
   await p.goto(`${BASE}/song/${SONG}`, { waitUntil: "load" });
   await p.getByRole("button", { name: "Play", exact: true }).click();
-  await p.waitForTimeout(3000);
+  const t0 = Date.now();
+  // a YouTube song's audio takes a few seconds to arrive
+  await p.waitForFunction(() => Number(document.querySelector('[aria-label="Position in the song"]')?.getAttribute("aria-valuenow")) >= 1, null, { timeout: 15000 });
+  const startedIn = (Date.now() - t0) / 1000;
+  await p.waitForTimeout(2000);
   const now = await p.getByRole("slider", { name: "Position in the song" }).getAttribute("aria-valuenow");
   await p.screenshot({ path: `${SHOTS}/playing-dark.png` });
   await p.getByRole("button", { name: "Pause", exact: true }).click();
-  if (Number(now) < 1) throw new Error(`position ${now}`);
+  if (Number(now) < 2) throw new Error(`position ${now}`);
   if (errors.length) throw new Error(errors.join(" | "));
-  return `at ${now}s after 3 s`;
+  return `moving after ${startedIn.toFixed(1)} s, at ${now} s two seconds later`;
 });
 
 await test("scratch: write notes, autosave, reload keeps them", async () => {

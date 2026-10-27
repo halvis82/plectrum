@@ -7,7 +7,7 @@ import * as ort from "onnxruntime-web/all";
 import { analyzeChords, noteRows, withNotes, type Analysis, type ChordFrames, type ModelMeta, type NoteRow, type Rhythm } from "./analyze";
 import { FRAMES_PER_CHUNK, HOP, N_BINS, SR, logCqt, parseBasis, type CqtBasis } from "./cqt";
 import { N_CLASSES, viterbi } from "./decode";
-import { GUITAR_SR, SEGMENT, decodeGuitarNotes, guitarActivations, halfToFloat, resampleTo } from "./guitar";
+import { CANDIDATE_ONSET, DEFAULT_GUITAR_NOTES, GUITAR_SR, SEGMENT, decodeGuitarNotes, guitarActivations, halfToFloat, resampleTo, type GuitarActivations } from "./guitar";
 import type { Note } from "./notes";
 import { NB, NF, stringProbs } from "./strings";
 
@@ -216,6 +216,12 @@ async function tab(req: Extract<WorkerRequest, { type: "notes" }>) {
     ns.forEach((n, i) => out.set(known.get(`${n.start}:${n.midi}`)!, i * 6));
     return out;
   };
+  // every note down to the candidate threshold, each with its onset confidence (the page shows as many
+  // as its slider asks for)
+  const heard = async (a: GuitarActivations, upTo = Infinity) => {
+    const notes = decodeGuitarNotes(a, { ...DEFAULT_GUITAR_NOTES, onset: CANDIDATE_ONSET }).filter((n) => n.start < upTo);
+    return { notes, probs: await probsFor(notes) };
+  };
   let last = performance.now();
   const acts = await guitarActivations(resampleTo(y, SR, GUITAR_SR), runGuitar, async (p, sofar) => {
     post({ id: req.id, type: "progress", stage: "notes", p });
@@ -223,9 +229,9 @@ async function tab(req: Extract<WorkerRequest, { type: "notes" }>) {
     last = performance.now();
     // notes near the edge may still be ringing on, so the update stops a second short of it
     const upTo = sofar.frames / 100 - 1;
-    const ns = decodeGuitarNotes(sofar).filter((n) => n.start < upTo);
-    post({ id: req.id, type: "partial", notes: noteRows(ns, await probsFor(ns)), upTo });
+    const h = await heard(sofar, upTo);
+    post({ id: req.id, type: "partial", notes: noteRows(h.notes, h.probs), upTo });
   });
-  const all = decodeGuitarNotes(acts);
-  post({ id: req.id, type: "done", result: withNotes({ frames: req.frames, rhythm: req.rhythm, duration: y.length / SR }, all, await probsFor(all)) });
+  const h = await heard(acts);
+  post({ id: req.id, type: "done", result: withNotes({ frames: req.frames, rhythm: req.rhythm, duration: y.length / SR }, h.notes, h.probs) });
 }

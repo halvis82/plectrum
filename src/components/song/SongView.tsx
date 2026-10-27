@@ -11,7 +11,7 @@ import { usePendingNotes } from "@/lib/pending";
 import { touchPane } from "@/lib/follow";
 import { addCut, applyEdits, keptLength, setChords, type EditNote, type Edits, type Technique } from "@/lib/edits";
 import { useEdits } from "@/lib/useEdits";
-import { filterByDetail, noteStrength } from "@/lib/strength";
+import { DEFAULT_DETAIL, hasConfidence, noteStrength, notesForDetail } from "@/lib/strength";
 import { Transport, type SynthNote } from "@/lib/transport";
 import type { Captions } from "@/lib/captions";
 import { useWords } from "@/lib/useWords";
@@ -46,13 +46,13 @@ type Prefs = Omit<View, "capo"> & {
   mode: "tab" | "bars" | "lyrics";
   follow: boolean;
   lyricOffset: number;
-  /** 1 = every note heard, lower = only the most clearly played */
-  detail: number;
+  /** 1 = every note heard, lower = only the most clearly played; null = the recommended setting */
+  clean: number | null;
   /** grid steps per beat for editing */
   snap: number;
 };
 
-const DEFAULT_PREFS: Prefs = { transpose: 0, capo: 0, simplify: "triads", tuning: null, mode: "tab", follow: true, lyricOffset: 0, detail: 1, snap: 4 };
+const DEFAULT_PREFS: Prefs = { transpose: 0, capo: 0, simplify: "triads", tuning: null, mode: "tab", follow: true, lyricOffset: 0, clean: null, snap: 4 };
 
 function usePrefs(id: string, hasTab: boolean) {
   const storageKey = `cc:view3:${id}`;
@@ -80,7 +80,7 @@ function usePrefs(id: string, hasTab: boolean) {
   return { view, update };
 }
 
-const rowToInput = ([start, end, midi, amp, ...strings]: NoteRow, shift = 0) => ({ start, end, midi: midi + shift, amp, strings: strings.length === 6 ? strings : undefined });
+const rowToInput = (r: NoteRow, shift = 0) => ({ start: r[0], end: r[1], midi: r[2] + shift, amp: r[3], strings: r.length >= 10 ? r.slice(4, 10) : undefined });
 
 export function SongView({ song }: { song: SongData }) {
   const router = useRouter();
@@ -107,9 +107,11 @@ export function SongView({ song }: { song: SongData }) {
 
   // ---- notes: as heard (thinned by the detail slider) or as written by hand ----
   const rows = partial ? partial.notes : a.notes;
-  const strength = useMemo(() => (rows ? noteStrength(rows) : null), [rows]);
-  const detail = view?.detail ?? 1;
-  const shownRows = useMemo(() => (rows && strength ? filterByDetail(rows, strength, detail) : null), [rows, strength, detail]);
+  const confident = hasConfidence(rows);
+  const strength = useMemo(() => (rows && !confident ? noteStrength(rows) : null), [rows, confident]);
+  // songs analyzed before the cleanup start with every note, as they always showed
+  const detail = view?.clean ?? (confident ? DEFAULT_DETAIL : 1);
+  const shownRows = useMemo(() => (rows ? notesForDetail(rows, detail, strength) : null), [rows, strength, detail]);
   const detected = useMemo(() => (a.notes ? detectTuning(a.notes.map((r) => rowToInput(r))) : "standard"), [a.notes]);
   const autoTuning = TUNINGS.find((t) => t.id === (view?.tuning ?? detected)) ?? TUNINGS[0];
   const written = edits?.tab ?? null;
@@ -344,7 +346,7 @@ export function SongView({ song }: { song: SongData }) {
 
   const tabCaption = written
     ? `Edited by hand, frets as played${openStrings.join() !== STANDARD.join() ? `, ${TUNINGS.find((t) => t.strings.join() === openStrings.join())?.name ?? "custom"} tuning` : ""}. Capo and transpose change only the chord names here.`
-    : `${detail < 1 ? `The ${shownCount} most clearly played of ${allCount} notes` : "Every note heard"}, on the string and fret that keeps your hand in one place${capo > 0 ? `, counted from capo ${capo}` : ""}. Tap a bar to play from there.`;
+    : `${detail < 1 ? `The ${shownCount} clearest of ${allCount} notes heard` : "Every note heard"}, on the string and fret that keeps your hand in one place${capo > 0 ? `, counted from capo ${capo}` : ""}. Tap a bar to play from there.`;
 
   return (
     <div className="pb-44">
@@ -412,19 +414,31 @@ export function SongView({ song }: { song: SongData }) {
           </button>
         </div>
         {view.mode === "tab" && !written && rows && (
-          <div className="mt-2 flex items-center gap-3">
+          <div className={`mt-2 flex items-center gap-3 ${confident ? "pb-3" : ""}`}>
             <span className="text-xs text-muted shrink-0 w-16">Clearest</span>
-            <input
-              type="range"
-              className="range flex-1 min-w-0"
-              min={0}
-              max={1}
-              step={0.02}
-              value={detail}
-              style={{ ["--fill" as string]: `${detail * 100}%` }}
-              onChange={(e) => update({ detail: Number(e.target.value) })}
-              aria-label="How many notes to show, from only the clearest to every note heard"
-            />
+            <span className="relative flex-1 min-w-0 flex items-center">
+              <input
+                type="range"
+                className="range w-full"
+                min={0}
+                max={1}
+                step={0.02}
+                value={detail}
+                style={{ ["--fill" as string]: `${detail * 100}%` }}
+                onChange={(e) => update({ clean: Number(e.target.value) })}
+                aria-label="How many notes to show, from only the clearest to every note heard"
+              />
+              {confident && (
+                <button
+                  onClick={() => update({ clean: null })}
+                  className={`absolute -bottom-3 -translate-x-1/2 text-[10px] whitespace-nowrap ${view.clean === null ? "text-accent font-medium" : "text-muted underline"}`}
+                  style={{ left: `calc(${DEFAULT_DETAIL * 100}% + ${(0.5 - DEFAULT_DETAIL) * 20}px)` }}
+                  title="Back to the recommended setting"
+                >
+                  ▲ recommended
+                </button>
+              )}
+            </span>
             <span className="text-xs text-muted shrink-0 w-16 text-right">All notes</span>
             <span className="text-xs tabular-nums text-muted shrink-0 hidden sm:inline">
               {shownCount}/{allCount}

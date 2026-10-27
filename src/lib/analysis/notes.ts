@@ -23,6 +23,9 @@ export type Note = {
   midi: number;
   /** mean frame activation, 0..1 */
   amp: number;
+  /** the guitar model's evidence (guitar.ts): onset peak, and mean frame activity over the note */
+  on?: number;
+  fr?: number;
 };
 
 export type NoteOptions = {

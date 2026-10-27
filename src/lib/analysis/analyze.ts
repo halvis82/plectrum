@@ -6,6 +6,7 @@ import { N_CLASSES, beatChords, toSegments, viterbi, type Segment } from "./deco
 import type { Note } from "./notes";
 import { DEFAULT_NOTE_CHORDS, noteChordScores } from "./notechords";
 import { stringProbs, type RunStrings } from "./strings";
+import { DEFAULT_GUITAR_NOTES } from "./guitar";
 
 /** Decoding knobs (tuned on GuitarSet, see scripts/guitarset-tune.mts). */
 export type DecodeOptions = {
@@ -54,7 +55,8 @@ export type Analysis = {
   /** frame-level smoothed segments [start, end, class] */
   segments: Segment[];
   /** every transcribed note: [start s, end s, MIDI pitch, strength 0..1], then, when the string
-   * model ran, the probability of each string (low E first); absent on older songs */
+   * model ran, the probability of each string (low E first), then (newer songs) the note model's onset
+   * confidence, which says how clearly it was played; absent on older songs */
   notes?: NoteRow[];
 };
 
@@ -77,12 +79,14 @@ export async function analyzeChords(y: Float32Array, basis: CqtBasis, meta: Mode
   return { result: decode(frames, r, y.length / SR, opts), frames, rhythm: r, duration: y.length / SR };
 }
 
-/** Notes as stored: [start, end, MIDI, strength] plus each string's probability when known. */
+/** Notes as stored: [start, end, MIDI, strength], each string's probability when known, then the onset
+ * confidence when the decoder gave one. */
 export function noteRows(notes: Note[], probs: ArrayLike<number> | null): NoteRow[] {
   const r2 = (x: number) => Math.round(x * 100) / 100;
   return notes.map((n, i): NoteRow => {
     const row: NoteRow = [round(n.start), round(n.end), n.midi, r2(n.amp)];
     if (probs) for (let s = 0; s < 6; s++) row.push(r2(probs[i * 6 + s]));
+    if (probs && n.on !== undefined) row.push(r2(n.on));
     return row;
   });
 }
@@ -90,7 +94,9 @@ export function noteRows(notes: Note[], probs: ArrayLike<number> | null): NoteRo
 /** The final analysis: chords decided again with the notes played (strong evidence for the chord),
  * and the notes themselves. */
 export function withNotes(pass: Omit<ChordPass, "result">, notes: Note[], probs: ArrayLike<number> | null, opts: DecodeOptions = DEFAULT_DECODE): Analysis {
-  const ev = noteChordScores(notes, pass.frames.times, NOTE_CHORDS);
+  // the chord evidence was tuned on notes heard at the model's own onset threshold
+  const played = notes.filter((n) => (n.on ?? 1) >= DEFAULT_GUITAR_NOTES.onset);
+  const ev = noteChordScores(played, pass.frames.times, NOTE_CHORDS);
   const result = decode({ ...pass.frames, logp: pass.frames.logp.map((v, i) => v + ev[i]) }, pass.rhythm, pass.duration, opts);
   result.notes = noteRows(notes, probs);
   return result;
