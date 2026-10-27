@@ -6,6 +6,16 @@
 import { useSyncExternalStore } from "react";
 import type { Analysis, NoteRow } from "./analysis/analyze";
 import type { SongData } from "@/components/song/SongView";
+import type { Stage } from "./audio";
+
+export const STAGE_LABEL: Record<Stage, string> = {
+  model: "Loading the models (first time only)",
+  features: "Listening to the harmony",
+  chords: "Recognizing chords",
+  beats: "Finding the beat",
+  notes: "Catching every note",
+  paused: "Paused while your newest song's tab is made",
+};
 
 /** `partial`: the tab so far (notes starting before `upTo` seconds); `analysis`: the finished one,
  * notes and the chords decided with them */

@@ -4,11 +4,15 @@
 
 import { GuitarSynth } from "./synth";
 
-export type SynthNote = { t: number; end: number; midi: number; gain: number; soft: boolean };
+/** `string` 0 = low E; `tech` the technique leading into the note (see TECHNIQUES in edits.ts) */
+export type SynthNote = { t: number; end: number; midi: number; string: number; gain: number; tech: number };
 /** `buffering`: playing, but the song's audio is still on its way */
-export type TransportState = { playing: boolean; rate: number; audio: boolean; guitar: boolean; click: boolean; hasMedia: boolean; buffering: boolean };
+/** `balance`: with both playing, 0 is only the song and 1 only the guitar */
+export type TransportState = { playing: boolean; rate: number; audio: boolean; guitar: boolean; click: boolean; hasMedia: boolean; buffering: boolean; balance: number };
 
-const LOOKAHEAD = 0.3; // seconds of real time scheduled ahead
+// seconds of real time scheduled ahead; a hidden tab runs its timers only about once a second
+const LOOKAHEAD = 0.3;
+const LOOKAHEAD_HIDDEN = 2;
 
 export class Transport {
   private media: HTMLAudioElement | null = null;
@@ -42,7 +46,7 @@ export class Transport {
     private meter: number,
     private downbeat: number,
   ) {
-    this.snapshot = { playing: false, rate: 1, audio: true, guitar: false, click: false, hasMedia: false, buffering: false };
+    this.snapshot = { playing: false, rate: 1, audio: true, guitar: false, click: false, hasMedia: false, buffering: false, balance: 0.5 };
   }
 
   // ---- state for React (useSyncExternalStore) ----
@@ -82,6 +86,19 @@ export class Transport {
     this.nextNote = this.firstAfter(this.scheduledTo);
   }
 
+  /** Song against guitar when both play; takes effect right away. */
+  setBalance(b: number) {
+    this.set({ balance: b });
+    this.applyLevels();
+  }
+
+  private applyLevels() {
+    const b = this.snapshot.balance;
+    const both = this.snapshot.audio && this.snapshot.guitar;
+    if (this.media) this.media.volume = both ? Math.min(1, 2 * (1 - b)) : 1;
+    if (this.synth && this.ctx) this.synth.out.gain.setTargetAtTime(both ? Math.min(1, 2 * b) * 0.9 : 0.9, this.ctx.currentTime, 0.02);
+  }
+
   setOptions(o: Partial<Pick<TransportState, "audio" | "guitar" | "click" | "rate">>) {
     const playing = this.snapshot.playing;
     const t = this.now();
@@ -91,14 +108,17 @@ export class Transport {
       this.media.playbackRate = this.snapshot.rate;
       this.media.muted = !this.snapshot.audio;
     }
+    this.applyLevels();
     if (playing) {
       this.seek(t);
       this.play();
     }
   }
 
+  /** the song's audio sets the clock while it is heard; the guitar alone runs on its own clock, so a
+   * slow stream never holds it up */
   private get useMedia() {
-    return !!this.media;
+    return !!this.media && this.snapshot.audio;
   }
 
   now = (): number => {
@@ -111,10 +131,16 @@ export class Transport {
     this.ctx ??= new AudioContext({ latencyHint: "interactive" });
     void this.ctx.resume();
     this.synth ??= new GuitarSynth(this.ctx);
+    this.applyLevels();
+    if (this.snapshot.guitar) await this.guitarReady();
     let t = this.now();
     if (t >= this.duration - 0.05) t = 0;
     if (t < 0.3 && this.introAt > 1) t = this.introAt;
     t = this.skipCut(t);
+    if (this.media && !this.useMedia) {
+      this.media.pause();
+      this.media.currentTime = t;
+    }
     if (this.useMedia) {
       const m = this.media!;
       m.playbackRate = this.snapshot.rate;
@@ -132,10 +158,21 @@ export class Transport {
     this.pos = t;
     this.startedAt = performance.now();
     this.resetSchedule(t);
-    this.set({ playing: true });
+    this.set({ playing: true, buffering: this.useMedia && this.snapshot.buffering });
     clearInterval(this.timer);
     this.timer = window.setInterval(this.tick, 40);
     this.tick();
+  }
+
+  /** The guitar's recordings, waited for a few seconds at most (the plucked-string model plays until
+   * they are in). */
+  private async guitarReady() {
+    let ok = false;
+    const ready = this.synth!.ready.then((r) => (ok = r));
+    await Promise.race([ready, new Promise((r) => setTimeout(r, 50))]);
+    if (ok) return;
+    this.set({ playing: true, buffering: true });
+    await Promise.race([ready, new Promise((r) => setTimeout(r, 6000))]);
   }
 
   pause() {
@@ -149,7 +186,7 @@ export class Transport {
 
   seek(t: number) {
     t = this.skipCut(Math.max(0, Math.min(this.duration, t)));
-    if (this.useMedia) this.media!.currentTime = t;
+    if (this.media) this.media.currentTime = t;
     this.pos = t;
     this.startedAt = performance.now();
     this.stopScheduled();
@@ -157,11 +194,11 @@ export class Transport {
   }
 
   /** Plays one note right away (tapping a note while editing). */
-  preview(midi: number, dur = 0.8) {
+  preview(midi: number, dur = 0.8, string = -1) {
     this.ctx ??= new AudioContext({ latencyHint: "interactive" });
     void this.ctx.resume();
     this.synth ??= new GuitarSynth(this.ctx);
-    this.synth.play(midi, this.ctx.currentTime + 0.01, dur);
+    this.synth.play({ midi, string, when: this.ctx.currentTime + 0.01, dur, gain: 0.8, tech: 0 });
   }
 
   dispose() {
@@ -215,7 +252,7 @@ export class Transport {
     const ctx = this.ctx;
     if (!ctx || !this.synth) return;
     const rate = this.snapshot.rate;
-    const horizon = t + LOOKAHEAD * rate;
+    const horizon = t + (document.hidden ? LOOKAHEAD_HIDDEN : LOOKAHEAD) * rate;
     const at = (songT: number) => ctx.currentTime + Math.max(0, (songT - t) / rate);
     const inCut = (x: number) => this.cuts.some(([a, b]) => x >= a && x < b);
     if (this.snapshot.guitar) {
@@ -223,7 +260,7 @@ export class Transport {
         const n = this.notes[this.nextNote++];
         if (n.t < t - 0.03 || inCut(n.t)) continue;
         const when = at(n.t);
-        const stop = this.synth.play(n.midi, when, (n.end - n.t) / rate, n.gain, n.soft);
+        const stop = this.synth.play({ midi: n.midi, string: n.string, when, dur: (n.end - n.t) / rate, gain: n.gain, tech: n.tech });
         this.stops.push({ stop, until: when + (n.end - n.t) / rate + 0.2 });
       }
     } else this.nextNote = this.firstAfter(horizon);

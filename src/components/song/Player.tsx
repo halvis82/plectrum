@@ -138,9 +138,17 @@ export function Player({
             <button onClick={() => setMenu(menu === "speed" ? null : "speed")} className={`btn btn-sm ${st.rate !== 1 ? "btn-primary" : ""}`} aria-label="Speed" aria-expanded={menu === "speed"}>
               {st.rate}×
             </button>
-            <button onClick={() => setMenu(menu === "sound" ? null : "sound")} className="btn btn-sm" aria-label="What you hear" aria-expanded={menu === "sound"}>
+            <button onClick={() => setMenu(menu === "sound" ? null : "sound")} className={`btn btn-sm gap-1.5 ${st.guitar ? "btn-primary" : ""}`} aria-label="What you hear" aria-expanded={menu === "sound"}>
+              {st.guitar && (
+                <span className="hidden sm:inline-flex">
+                  <GuitarIcon />
+                </span>
+              )}
               {sound === "song" ? "Song" : sound === "guitar" ? "Guitar" : "Both"}
-              {st.click && " + click"}
+              {st.click && <span className="hidden sm:inline">+ click</span>}
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden>
+                <path d="M6 15l6-6 6 6" />
+              </svg>
             </button>
           </div>
 
@@ -178,21 +186,38 @@ export function Player({
                     {(
                       [
                         ["song", "Song", hasAudio],
-                        ["guitar", "Guitar", true],
                         ["both", "Both", hasAudio],
+                        ["guitar", "Guitar", true],
                       ] as const
                     ).map(([k, label, ok]) => (
                       <button
                         key={k}
                         disabled={!ok}
                         onClick={() => transport.setOptions({ audio: k !== "guitar", guitar: k !== "song" })}
-                        className={`btn btn-sm ${sound === k ? "btn-primary" : ""}`}
+                        className={`btn btn-sm px-1.5 ${sound === k ? "btn-primary" : ""}`}
                       >
                         {label}
                       </button>
                     ))}
                   </div>
-                  <p className="mt-2 text-xs text-muted">Guitar plays the tab as written, on an acoustic guitar, in time with the song.</p>
+                  {sound === "both" && (
+                    <div className="mt-3 flex items-center gap-2 text-xs text-muted">
+                      <span>Song</span>
+                      <input
+                        type="range"
+                        className="range flex-1"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={st.balance}
+                        style={{ ["--fill" as string]: `${st.balance * 100}%` }}
+                        onChange={(e) => transport.setBalance(Number(e.target.value))}
+                        aria-label="Balance between the song and the guitar"
+                      />
+                      <span>Guitar</span>
+                    </div>
+                  )}
+                  <p className="mt-2 text-xs text-muted">The guitar plays the tab exactly as shown, note for note, on a recorded acoustic guitar.</p>
                   {audioNote && <p className="mt-1 text-xs text-muted">{audioNote}</p>}
                   <label className="mt-3 flex items-center gap-2">
                     <input type="checkbox" checked={st.click} onChange={(e) => transport.setOptions({ click: e.target.checked })} />
@@ -210,3 +235,15 @@ export function Player({
 }
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+/** a small acoustic guitar */
+export function GuitarIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M14.5 9.5L20 4" />
+      <path d="M18.5 2.5l3 3" />
+      <path d="M11.3 8.2c-1.3-1-3.3-.9-4.5.4-.7.7-.9 1.6-.9 2.4-1.3.1-2.4.6-3.1 1.6-1.5 2.1-.8 5.2 1.4 6.9s5.4 2.1 7.2.4c.8-.8 1.2-1.8 1.2-3 .9-.1 1.8-.4 2.4-1.1 1.3-1.3 1.3-3.4.2-4.7" />
+      <circle cx="9.5" cy="14.5" r="1.6" />
+    </svg>
+  );
+}

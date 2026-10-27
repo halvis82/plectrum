@@ -13,12 +13,14 @@ import { addCut, applyEdits, keptLength, setChords, type EditNote, type Edits, t
 import { useEdits } from "@/lib/useEdits";
 import { DEFAULT_DETAIL, hasConfidence, noteStrength, notesForDetail } from "@/lib/strength";
 import { Transport, type SynthNote } from "@/lib/transport";
+import { prefetchGuitar } from "@/lib/synth";
+import { fetchAudio, workOutTab } from "@/lib/retab";
 import type { Captions } from "@/lib/captions";
 import { useWords } from "@/lib/useWords";
-import { ChordDiagram } from "../ChordDiagram";
+import { ChordDiagram, voicings } from "../ChordDiagram";
 import { TabSheet, type SheetNote } from "./TabSheet";
 import { BarsSheet, LyricsSheet, Working } from "./Sheets";
-import { Player } from "./Player";
+import { GuitarIcon, Player } from "./Player";
 import { EditToolbar, type NoteActions } from "./EditToolbar";
 import { ChordPicker } from "./ChordPicker";
 import { Trim } from "./Trim";
@@ -144,12 +146,12 @@ export function SongView({ song }: { song: SongData }) {
   // ---- playback ----
   const transport = useMemo(() => new Transport(a.duration, a.beats, a.meter, a.downbeat), [song.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => transport.dispose(), [transport]);
+  useEffect(() => {
+    const t = setTimeout(prefetchGuitar, 4000);
+    return () => clearTimeout(t);
+  }, []);
   useEffect(() => transport.setGrid(a.duration, a.beats, a.meter, a.downbeat), [transport, a]);
   useEffect(() => transport.setCuts(cuts), [transport, cuts]);
-  useEffect(() => {
-    const notes: SynthNote[] = sheetNotes.map((n) => ({ t: n.start, end: Math.max(n.end, n.start + 0.12), midi: midiOf(n), gain: written ? 0.75 : 0.35 + 0.5 * Math.min(1, n.amp * 1.5), soft: n.tech === 1 || n.tech === 2 }));
-    transport.setNotes(notes);
-  }, [transport, sheetNotes, midiOf, written]);
   const tstate = useSyncExternalStore(transport.subscribe, transport.getState, transport.getState);
 
   const [localUrl, setLocalUrl] = useState<string | null>(null);
@@ -175,6 +177,8 @@ export function SongView({ song }: { song: SongData }) {
       if (url) URL.revokeObjectURL(url);
     };
   }, [song.id, song.youtube_id, song.audio_url, scratch]);
+  // where the audio comes from to work out a missing tab
+  const tabSource = song.youtube_id ? (p: (x: number) => void) => fetchAudio(`/api/audio/${song.youtube_id}`, p) : localUrl ? () => fetch(localUrl).then((r) => r.blob()) : null;
   const audioSrc = audioFailed ? null : song.youtube_id ? `/api/audio/${song.youtube_id}` : localUrl;
   const hasAudio = !!audioSrc;
   const audioEl = useRef<HTMLAudioElement>(null);
@@ -252,7 +256,7 @@ export function SongView({ song }: { song: SongData }) {
       if (selected === null) return;
       lastFret.current = f;
       setNote(selected, (n) => ((n[3] = f), n));
-      transport.preview(openStrings[sel!.string] + f, 0.5);
+      transport.preview(openStrings[sel!.string] + f, 0.5, sel!.string);
     },
     moveString: (d) => selected !== null && setNote(selected, (n) => ((n[2] = Math.max(0, Math.min(strings - 1, n[2] + d))), n)),
     nudge: (d) => selected !== null && setNote(selected, (n) => ((n[0] = Math.max(0, +(n[0] + d * stepLen(n[0])).toFixed(4))), n)),
@@ -264,7 +268,7 @@ export function SongView({ song }: { song: SongData }) {
       setSelected(null);
       ed.change((e) => ({ ...e, tab: (e.tab ?? []).filter((_, i) => i !== id) }));
     },
-    hear: () => sel && transport.preview(midiOf(sel)),
+    hear: () => sel && transport.preview(midiOf(sel), 0.8, sel.string),
   };
   const editHandlers = editing && written
     ? {
@@ -273,7 +277,7 @@ export function SongView({ song }: { song: SongData }) {
           setSelected(id);
           if (id !== null && written[id]) {
             lastFret.current = written[id][3];
-            transport.preview(openStrings[written[id][2]] + written[id][3], 0.6);
+            transport.preview(openStrings[written[id][2]] + written[id][3], 0.6, written[id][2]);
           }
         },
         add: (t: number, s: number) => {
@@ -281,7 +285,7 @@ export function SongView({ song }: { song: SongData }) {
           const id = written.length;
           ed.change((e) => ({ ...e, tab: [...(e.tab ?? []), [+t.toFixed(4), +len.toFixed(4), s, lastFret.current, 0] as EditNote] }));
           setSelected(id);
-          transport.preview(openStrings[s] + lastFret.current, 0.5);
+          transport.preview(openStrings[s] + lastFret.current, 0.5, s);
         },
         move: (id: number, t: number, s: number, first: boolean) => setNote(id, (n) => ((n[0] = Math.max(0, t)), (n[2] = s), n), !first),
         resize: (id: number, end: number, first: boolean) => setNote(id, (n) => ((n[1] = Math.max(0.03, +(end - n[0]).toFixed(4))), n), !first),
@@ -300,6 +304,27 @@ export function SongView({ song }: { song: SongData }) {
   // stable functions and lists for the tab sheet, which only re-renders when they change
   const shapeFn = useMemo(() => (view ? makeShapeFn(a, { ...view, capo: capo + tuningShift }, stats.key) : null), [a, view, capo, tuningShift, stats.key]);
   const namesFn = useMemo(() => (shapeFn ? (c: number) => shapeFn(c).name : null), [shapeFn]);
+
+  // what the guitar plays: the tab as shown, or with no tab, the chords as shown, strummed on each beat
+  const guitarNotes = useMemo((): SynthNote[] => {
+    if (sheetNotes.length)
+      return sheetNotes.map((n) => ({ t: n.start, end: Math.max(n.end, n.start + 0.12), midi: midiOf(n), string: n.string, gain: written ? 0.75 : 0.35 + 0.5 * Math.min(1, n.amp * 1.5), tech: n.tech }));
+    if (!shapeFn) return [];
+    const out: SynthNote[] = [];
+    a.beats.forEach((t, i) => {
+      const { chord } = shapeFn(a.chords[i]);
+      const v = chord && voicings(chord)[0];
+      if (!v) return;
+      const end = a.beats[i + 1] ?? a.duration;
+      const downbeat = (((i - a.downbeat) % a.meter) + a.meter) % a.meter === 0;
+      // the shapes are in standard tuning, counted from the capo
+      v.f.forEach((f, s) => {
+        if (f >= 0) out.push({ t, end, midi: STANDARD[s] + capo + tuningShift + (f === 0 ? 0 : f + v.b - 1), string: s, gain: downbeat ? 0.7 : 0.5, tech: 0 });
+      });
+    });
+    return out;
+  }, [sheetNotes, midiOf, written, shapeFn, a, capo, tuningShift]);
+  useEffect(() => transport.setNotes(strum(guitarNotes)), [transport, guitarNotes]);
   const stringLabels = useMemo(() => stringNames(openStrings.map((m) => m + tabCapo)), [openStrings, tabCapo]);
   const seekPlayCb = useCallback(
     (t: number) => {
@@ -416,9 +441,30 @@ export function SongView({ song }: { song: SongData }) {
             ]}
           />
           <span className="flex-1" />
+          {guitarNotes.length > 0 && (
+            <button
+              onClick={() => {
+                if (tstate.guitar && !tstate.audio) {
+                  if (hasAudio) transport.setOptions({ audio: true, guitar: false });
+                  else if (tstate.playing) transport.pause();
+                  else void transport.play();
+                  return;
+                }
+                transport.setOptions({ audio: false, guitar: true });
+                if (!tstate.playing) void transport.play();
+              }}
+              className={`btn btn-sm gap-1.5 ${tstate.guitar && !tstate.audio ? "btn-primary" : ""}`}
+              aria-pressed={tstate.guitar && !tstate.audio}
+              aria-label={sheetNotes.length ? "Hear the tab" : "Hear the chords"}
+              title={sheetNotes.length ? "Play the tab as shown on an acoustic guitar, to hear if it matches the song" : "Strum the chords as shown on an acoustic guitar, to hear if they match the song"}
+            >
+              <GuitarIcon />
+              <span className="hidden sm:inline">{sheetNotes.length ? "Hear the tab" : "Hear the chords"}</span>
+            </button>
+          )}
           {editing ? null : (
-            <button onClick={startEditing} className="btn btn-sm" title="Fix notes and chords, add your own, cut parts out">
-              ✎ Edit
+            <button onClick={startEditing} className="btn btn-sm" title="Fix notes and chords, add your own, cut parts out" aria-label="Edit">
+              ✎<span className="hidden sm:inline"> Edit</span>
             </button>
           )}
           <button onClick={() => setShowOptions(!showOptions)} className={`btn btn-sm px-2.5 ${showOptions ? "btn-primary" : ""}`} aria-expanded={showOptions} aria-label="Display options">
@@ -593,9 +639,17 @@ export function SongView({ song }: { song: SongData }) {
         ) : view.mode === "tab" && !notesComing && !a.notes ? (
           <div className="mt-6 text-sm text-muted">
             <p>There&apos;s no tab for this one yet: it was caught before tabs existed, or its page was closed before every note was in.</p>
-            <button onClick={startEditing} className="btn btn-sm mt-3">
-              Write the tab by hand
-            </button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {tabSource && (
+                <button onClick={() => void workOutTab(song.id, tabSource)} className="btn btn-primary btn-sm">
+                  Work out the tab
+                </button>
+              )}
+              <button onClick={startEditing} className="btn btn-sm">
+                Write the tab by hand
+              </button>
+            </div>
+            {!tabSource && !scratch && <p className="mt-2 text-xs">The song&apos;s audio is only on the device that added it, so the tab can be worked out there.</p>}
           </div>
         ) : view.mode === "lyrics" ? (
           <LyricsSheet
@@ -717,4 +771,17 @@ function Segmented<T extends string>({ value, onChange, options }: { value: T; o
       ))}
     </div>
   );
+}
+
+/** Notes struck together (a chord written on one beat) are strummed, low string first, the way a hand
+ * sweeps across the strings. */
+function strum(notes: SynthNote[]): SynthNote[] {
+  const out = [...notes].sort((a, b) => a.t - b.t || a.string - b.string);
+  for (let i = 0; i < out.length; ) {
+    let j = i + 1;
+    while (j < out.length && out[j].t - out[i].t < 0.004) j++;
+    if (j - i > 2) for (let k = i; k < j; k++) out[k] = { ...out[k], t: out[k].t + (k - i) * 0.011 };
+    i = j;
+  }
+  return out;
 }

@@ -104,7 +104,7 @@ export function Tuner() {
     }
     const { ctx, s } = synth.current;
     void ctx.resume();
-    s.play(targets[i], ctx.currentTime + 0.02, 2.5, 0.9);
+    s.play({ midi: targets[i], string: i, when: ctx.currentTime + 0.02, dur: 2.5, gain: 0.9, tech: 0 });
   };
 
   const cents = reading ? Math.max(-50, Math.min(50, reading.cents)) : 0;

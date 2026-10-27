@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
 import { SR, decodeToMono, getMicStream, saveLocalAudio, sharedAnalyzer, type Stage } from "@/lib/audio";
-import { pendingSnapshot, setPending } from "@/lib/pending";
+import { STAGE_LABEL, pendingSnapshot, setPending } from "@/lib/pending";
 import { customAlphabet } from "nanoid";
 import type { SongData } from "@/components/song/SongView";
 import { PcmCapture, encodeWav, resample } from "@/lib/capture";
@@ -53,14 +53,6 @@ const LINK_FLOW: Flow = ["find", "audio", "read", "model", "features", "chords",
 const FILE_FLOW: Flow = ["read", "model", "features", "chords", "beats", "save"];
 const MIC_FLOW: Flow = ["prepare", "model", "features", "chords", "beats", "save"];
 
-const STAGE_LABEL: Record<Stage, string> = {
-  model: "Loading the models (first time only)",
-  features: "Listening to the harmony",
-  chords: "Recognizing chords",
-  beats: "Finding the beat",
-  notes: "Catching every note",
-  paused: "Paused while your newest song's tab is made",
-};
 
 const LINK_RE = /^\s*https?:\/\/[^\s/]+\.[^\s]+/i;
 

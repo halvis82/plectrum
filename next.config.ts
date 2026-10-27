@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
     // model files are versioned by name, so they can be cached forever
     return [
       { source: "/model/:file*", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
+      { source: "/guitar/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
       { source: "/ort/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
       // cross-origin isolation lets the analysis worker use several threads; "credentialless" keeps
       // cross-origin images (thumbnails) loading without CORP headers

@@ -4,7 +4,8 @@ import { validAnalysis } from "@/lib/analysis/validate";
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : undefined);
 
 /** Anyone can rename a song (public library). The browser that made a song adds its notes (and the
- * chords decided with them) once, with the edit key it got when saving the first chords. */
+ * chords decided with them) once, with the edit key it got when saving the first chords; a song that
+ * never got its notes can have them filled in by anyone, once. */
 export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) {
   const { id } = await ctx.params;
   const raw = await req.text();
@@ -16,9 +17,11 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) 
     return Response.json({ error: "Bad JSON" }, { status: 400 });
   }
   if (body.analysis !== undefined) {
-    if (typeof body.editKey !== "string" || !body.editKey) return Response.json({ error: "Forbidden" }, { status: 403 });
+    // the browser that made the song, within the hour, with its key; or anyone filling in a tab the
+    // song never got (a song's tab is never replaced this way)
+    const key = typeof body.editKey === "string" ? body.editKey : "";
     const [song] = (await sql`select analysis from songs
-      where id = ${id} and edit_key = ${body.editKey} and created_at > now() - interval '1 hour'`) as { analysis: Record<string, unknown> }[];
+      where id = ${id} and ((edit_key = ${key} and created_at > now() - interval '1 hour') or analysis->'notes' is null)`) as { analysis: Record<string, unknown> }[];
     if (!song) return Response.json({ error: "Forbidden" }, { status: 403 });
     // the notes, and the chords decided again with them; timing (beats, duration) stays as saved
     const u = (body.analysis ?? {}) as Record<string, unknown>;
