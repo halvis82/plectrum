@@ -114,7 +114,9 @@ export function SongView({ song }: { song: SongData }) {
   // songs analyzed before the cleanup start with every note, as they always showed
   const detail = view?.clean ?? (confident ? DEFAULT_DETAIL : 1);
   const shownRows = useMemo(() => (rows ? notesForDetail(rows, detail, strength) : null), [rows, strength, detail]);
-  const detected = useMemo(() => (a.notes ? detectTuning(a.notes.map((r) => rowToInput(r))) : "standard"), [a.notes]);
+  // the tuning is judged on the clearly played notes (the faint candidates kept for the slider include
+  // stray low ones)
+  const detected = useMemo(() => (a.notes ? detectTuning(notesForDetail(a.notes, hasConfidence(a.notes) ? DEFAULT_DETAIL : 1, null).map((r) => rowToInput(r))) : "standard"), [a.notes]);
   const autoTuning = TUNINGS.find((t) => t.id === (view?.tuning ?? detected)) ?? TUNINGS[0];
   const written = edits?.tab ?? null;
   const openStrings = written ? (edits?.tuning ?? STANDARD) : autoTuning.strings;
