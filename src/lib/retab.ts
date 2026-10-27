@@ -28,8 +28,8 @@ export async function workOutTab(id: string, audio: (onProgress: (p: number) => 
     // saving: leaving the page now asks first (see pending.ts)
     setPending(id, { analysis: done, save: { state: "saving" } });
     logEvent("retab-ok", { secs: Math.round((Date.now() - t0) / 1000), notes: done.notes?.length ?? 0 });
-    const { notes, chords, segments, meter, downbeat } = done;
-    const body = JSON.stringify({ key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } });
+    const { notes, chords, segments, meter, downbeat, beats, bpm, duration } = done;
+    const body = JSON.stringify({ key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat, beats, bpm, duration } });
     const save = async () => {
       setPending(id, { save: { state: "saving" } });
       const res = await fetch(`/api/songs/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body }).catch(() => null);

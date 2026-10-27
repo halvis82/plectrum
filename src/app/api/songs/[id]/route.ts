@@ -23,12 +23,16 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) 
     const [song] = (await sql`select analysis from songs
       where id = ${id} and ((edit_key = ${key} and created_at > now() - interval '1 hour') or analysis->'notes' is null)`) as { analysis: Record<string, unknown> }[];
     if (!song) return Response.json({ error: "Forbidden" }, { status: 403 });
-    // the notes, and the chords decided again with them; timing (beats, duration) stays as saved
+    // the notes, and the chords decided again with them; timing (beats, duration) stays as saved unless sent
     const u = (body.analysis ?? {}) as Record<string, unknown>;
-    const analysis = { ...song.analysis, notes: u.notes, chords: u.chords, segments: u.segments, meter: u.meter, downbeat: u.downbeat };
+    // (a tab worked out later comes with its own beats, from the same audio)
+    const timing = Array.isArray(u.beats) ? { beats: u.beats, bpm: u.bpm, duration: u.duration } : {};
+    const analysis = { ...song.analysis, ...timing, notes: u.notes, chords: u.chords, segments: u.segments, meter: u.meter, downbeat: u.downbeat };
     if (!validAnalysis(analysis)) return Response.json({ error: "Invalid analysis" }, { status: 400 });
     const songKey = typeof body.key === "string" ? body.key.slice(0, 20) : null;
-    await sql`update songs set analysis = ${JSON.stringify(analysis)}, song_key = coalesce(${songKey}, song_key), edit_key = null, updated_at = now() where id = ${id}`;
+    const a = analysis as { bpm: number; duration: number };
+    await sql`update songs set analysis = ${JSON.stringify(analysis)}, song_key = coalesce(${songKey}, song_key), bpm = ${a.bpm}, duration = ${a.duration},
+      edit_key = null, updated_at = now() where id = ${id}`;
     return new Response(null, { status: 204 });
   }
   const title = str(body.title, 200);
