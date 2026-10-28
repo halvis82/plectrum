@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getMicStream } from "@/lib/audio";
-import { detectPitch, hzOf, midiOf } from "@/lib/pitch";
+import { hzOf } from "@/lib/pitch";
 import { GuitarSynth } from "@/lib/synth";
 import { TUNINGS, stringNames, type TuningId } from "@/lib/tab";
+import { FRAME, STEP_MS, TunerTracker } from "@/lib/tuner";
 
 const IN_TUNE = 5; // cents
 
@@ -41,53 +42,32 @@ export function Tuner() {
     await ctx.resume();
     const src = ctx.createMediaStreamSource(stream);
     const hp = new BiquadFilterNode(ctx, { type: "highpass", frequency: 55 });
-    const an = new AnalyserNode(ctx, { fftSize: 4096 });
+    const dec = Math.max(1, Math.round(ctx.sampleRate / 24000));
+    const an = new AnalyserNode(ctx, { fftSize: 2 ** Math.ceil(Math.log2(FRAME * dec)) });
     src.connect(hp).connect(an);
     const raw = new Float32Array(an.fftSize);
-    const dec = Math.max(1, Math.round(ctx.sampleRate / 24000));
-    const x = new Float32Array(1536);
-    const recent: number[] = [];
-    let smooth: number | null = null;
+    const x = new Float32Array(FRAME);
+    const tracker = new TunerTracker();
     let inTuneSince = 0;
-    let quietSince = 0;
     const timer = window.setInterval(() => {
       an.getFloatTimeDomainData(raw);
       const from = raw.length - x.length * dec;
-      let rms = 0;
       for (let i = 0; i < x.length; i++) {
         let v = 0;
         for (let k = 0; k < dec; k++) v += raw[from + i * dec + k];
         x[i] = v / dec;
-        rms += x[i] * x[i];
       }
-      rms = Math.sqrt(rms / x.length);
-      const p = rms > 0.004 ? detectPitch(x, ctx.sampleRate / dec, 60, 1100) : null;
-      if (!p || p.clarity < 0.8) {
-        // keep the last reading on screen for a moment as the string dies away
-        if (!quietSince) quietSince = performance.now();
-        if (performance.now() - quietSince > 1500) {
-          setReading(null);
-          smooth = null;
-          recent.length = 0;
-        }
-        return;
-      }
-      quietSince = 0;
-      const m = midiOf(p.hz);
-      // a median over the last few readings removes single wild ones
-      recent.push(m);
-      if (recent.length > 5) recent.shift();
-      const med = [...recent].sort((a, b) => a - b)[recent.length >> 1];
-      smooth = smooth === null || Math.abs(smooth - med) > 0.5 ? med : smooth + 0.35 * (med - smooth);
+      const r = tracker.push(x, ctx.sampleRate / dec);
+      if (!r) return setReading(null);
       const ts = targetsRef.current;
-      const string = ts.reduce((best, t, i) => (Math.abs(smooth! - t) < Math.abs(smooth! - ts[best]) ? i : best), 0);
-      const cents = (smooth - ts[string]) * 100;
-      setReading({ string, cents, hz: hzOf(smooth), midi: smooth });
+      const string = ts.reduce((best, t, i) => (Math.abs(r.midi - t) < Math.abs(r.midi - ts[best]) ? i : best), 0);
+      const cents = (r.midi - ts[string]) * 100;
+      setReading({ string, cents, hz: hzOf(r.midi), midi: r.midi });
       if (Math.abs(cents) <= IN_TUNE) {
         if (!inTuneSince) inTuneSince = performance.now();
         else if (performance.now() - inTuneSince > 700) setTuned((t) => (t[string] ? t : t.map((v, i) => (i === string ? true : v))));
       } else inTuneSince = 0;
-    }, 40);
+    }, STEP_MS);
     stop.current = () => {
       clearInterval(timer);
       stream.getTracks().forEach((t) => t.stop());
@@ -121,7 +101,7 @@ export function Tuner() {
           return <line key={k} x1={150 + Math.sin(a) * r1} y1={165 - Math.cos(a) * r1} x2={150 + Math.sin(a) * 132} y2={165 - Math.cos(a) * 132} stroke="var(--line)" strokeWidth={k === 10 ? 3 : 2} strokeLinecap="round" />;
         })}
         <path d={describeArc(150, 165, 142, -6, 6)} stroke="rgb(34 197 94 / 0.55)" strokeWidth="7" fill="none" strokeLinecap="round" />
-        <g style={{ transform: `rotate(${angle}deg)`, transformOrigin: "150px 165px", transition: "transform 0.12s ease-out" }} opacity={reading ? 1 : 0.2}>
+        <g style={{ transform: `rotate(${angle}deg)`, transformOrigin: "150px 165px", transition: "transform 0.2s ease-out" }} opacity={reading ? 1 : 0.2}>
           <line x1="150" y1="165" x2="150" y2="38" stroke={color} strokeWidth="4" strokeLinecap="round" />
         </g>
         <circle cx="150" cy="165" r="7" fill={color} opacity={reading ? 1 : 0.3} />
@@ -137,6 +117,10 @@ export function Tuner() {
             <p className="text-6xl font-bold tracking-tight leading-none">{labels[reading.string]}</p>
             <p className={`mt-2 text-lg font-semibold ${good ? "text-green-500" : "text-accent"}`}>
               {good ? "In tune" : reading.cents < 0 ? `Tune up ↑` : `Tune down ↓`}
+              <span className="ml-2 text-sm font-normal text-muted tabular-nums">
+                {reading.cents > 0 ? "+" : reading.cents < 0 ? "−" : ""}
+                {Math.abs(Math.round(reading.cents))} cents
+              </span>
             </p>
           </>
         ) : (
