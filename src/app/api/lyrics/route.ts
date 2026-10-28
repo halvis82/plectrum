@@ -7,7 +7,7 @@ export async function GET(req: Request) {
   const artist = sp.get("artist")?.trim() ?? "";
   const duration = Number(sp.get("duration")) || 0;
   if (!title) return Response.json({ lyrics: null });
-  const headers = { "user-agent": "Strum (https://github.com/halvis82/strum)" };
+  const headers = { "user-agent": "Plectrum (https://github.com/halvis82/plectrum)" };
   const r = await fetch(`https://lrclib.net/api/search?${new URLSearchParams({ track_name: title, artist_name: artist })}`, { headers });
   let hits: LrcHit[] = r.ok ? await r.json() : [];
   if (hits.length === 0) {

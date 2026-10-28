@@ -9,9 +9,9 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: { default: "Strum", template: "%s · Strum" },
+  title: { default: "Plectrum", template: "%s · Plectrum" },
   description: "Get guitar chords from any song: paste a link, upload a file or just record it.",
-  appleWebApp: { capable: true, title: "Strum", statusBarStyle: "default" },
+  appleWebApp: { capable: true, title: "Plectrum", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -28,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <header className="mx-auto w-full max-w-5xl px-4 pt-5 pb-3 flex items-center justify-between">
           <HomeLink>
             <Logo />
-            Strum
+            Plectrum
           </HomeLink>
           <Suspense fallback={null}>
             <NewSongButton />

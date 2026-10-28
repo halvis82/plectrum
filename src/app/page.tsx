@@ -8,7 +8,7 @@ export default function Home() {
     <>
       <section className="pt-4 pb-6 max-w-2xl">
         <h1 className="text-[1.9rem] leading-tight sm:text-4xl font-bold tracking-tight">Chords and tabs for any song.</h1>
-        <p className="mt-2 text-muted">Paste a link, upload a file or let it listen. Strum works out the chords and the tab from the audio itself.</p>
+        <p className="mt-2 text-muted">Paste a link, upload a file or let it listen. Plectrum works out the chords and the tab from the audio itself.</p>
       </section>
       <div className="max-w-2xl">
         <Catcher />

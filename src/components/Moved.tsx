@@ -42,13 +42,13 @@ export function Moved() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/95 p-4">
       <div className="max-w-md rounded-2xl border border-line bg-surface p-6 shadow-lg">
-        <h2 className="text-lg font-semibold">ChordCatch is now Strum</h2>
+        <h2 className="text-lg font-semibold">ChordCatch is now Plectrum</h2>
         <p className="mt-2 text-sm text-muted">
-          It lives at strum.vercel.app now. This device has the audio of {audio.length === 1 ? "1 recording or upload" : `${audio.length} recordings and uploads`}, which only this address can read, so bring it along first.
+          It lives at plectrum.vercel.app now. This device has the audio of {audio.length === 1 ? "1 recording or upload" : `${audio.length} recordings and uploads`}, which only this address can read, so bring it along first.
         </p>
         <div className="mt-5 flex flex-wrap gap-2">
           <button onClick={move} disabled={state === "moving"} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-accent-fg disabled:opacity-60">
-            {state === "moving" ? "Moving…" : "Move it to Strum"}
+            {state === "moving" ? "Moving…" : "Move it to Plectrum"}
           </button>
           <button onClick={go} className="rounded-full border border-line px-4 py-2 text-sm">
             Go without it

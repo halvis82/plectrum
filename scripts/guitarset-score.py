@@ -1,4 +1,4 @@
-"""Score ChordCatch output (from scripts/guitarset-bench.mts) against GuitarSet JAMS chord annotations.
+"""Score Plectrum output (from scripts/guitarset-bench.mts) against GuitarSet JAMS chord annotations.
 
 Usage: python -I scripts/guitarset-score.py <jams-dir> <bench-out-dir>
 

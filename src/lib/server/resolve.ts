@@ -55,7 +55,7 @@ const decode = (s: string) =>
   s.replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 
 async function spotifyMeta(url: string): Promise<Meta> {
-  const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (compatible; Strum/1.0)" } });
+  const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (compatible; Plectrum/1.0)" } });
   if (!r.ok) throw new Error("Could not read that Spotify link.");
   const html = await r.text();
   const title = html.match(/<meta property="og:title" content="([^"]*)"/)?.[1];
