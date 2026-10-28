@@ -7,6 +7,8 @@ import { SR } from "./cqt";
 import { CANDIDATE_ONSET, DEFAULT_GUITAR_NOTES, GUITAR_SR, SEGMENT, decodeGuitarNotes, guitarActivations, halfToFloat, resampleTo, type GuitarActivations } from "./guitar";
 import type { Note } from "./notes";
 import { NB, NF, stringProbs } from "./strings";
+import { combine, fingerProbs, type RunFinger } from "./fingering";
+import { TUNINGS, detectTuning } from "../tab";
 import { download, type WorkerMessage, type WorkerRequest } from "./worker-shared";
 
 // served from this site by scripts/copy-ort.mjs
@@ -14,9 +16,17 @@ ort.env.wasm.wasmPaths = `/ort/${ort.env.versions.web}/`;
 
 const GUITAR_MODEL = "/model/guitar.v1.onnx";
 const GUITAR_WEIGHTS = "/model/guitar.v1.f16";
+const FINGER_MODEL = "/model/fingering.v1.onnx";
 
 
-let guitar: Promise<{ notes: ort.InferenceSession; strings: ort.InferenceSession }> | null = null;
+/** how much the fingering model counts against the string model (p_audio * p_fingering^w): with
+ * DEFAULT_TAB.audio 1 it raised held-out tab F1 most on phone recordings and Guitar-TECHS */
+const FINGER_W = 1;
+/** the notes the page shows at first (onset confidence, see DEFAULT_DETAIL): the fingering model reads
+ * the passage they make */
+const SHOWN_ONSET = 0.5;
+
+let guitar: Promise<{ notes: ort.InferenceSession; strings: ort.InferenceSession; finger: ort.InferenceSession }> | null = null;
 /** download progress of the note model's weights, 0..1 */
 let guitarLoaded = 0;
 let guitarReady = false;
@@ -27,22 +37,24 @@ function loadGuitar() {
     // all at low priority (see download); the runtime's own 28 MB file too, fetched here first so that
     // when onnxruntime asks for it, it comes from the cache
     const runtime = fetch(`${ort.env.wasm.wasmPaths}ort-wasm-simd-threaded.jsep.wasm`, { priority: "low" }).then((r) => r.arrayBuffer()).catch(() => null);
-    const [graph, half, stringsModel] = await Promise.all([
+    const [graph, half, stringsModel, fingerModel] = await Promise.all([
       fetch(GUITAR_MODEL, { priority: "low" }).then((r) => r.arrayBuffer()),
       download(GUITAR_WEIGHTS, (p) => (guitarLoaded = p), "low"),
-      fetch("/model/strings.v2.onnx", { priority: "low" }).then((r) => r.arrayBuffer()),
+      fetch("/model/strings.v3.onnx", { priority: "low" }).then((r) => r.arrayBuffer()),
+      fetch(FINGER_MODEL, { priority: "low" }).then((r) => r.arrayBuffer()),
     ]);
     await runtime;
     const strings = await ort.InferenceSession.create(stringsModel, { executionProviders: ["wasm"] });
+    const finger = await ort.InferenceSession.create(fingerModel, { executionProviders: ["wasm"] });
     // weights ship as float16 and run as float32
     const weights = new Uint8Array(halfToFloat(new Uint16Array(half)).buffer);
     const externalData = [{ path: "guitar.data", data: weights }];
     if ("gpu" in navigator) {
       try {
-        return { notes: await ort.InferenceSession.create(graph, { executionProviders: ["webgpu"], externalData }), strings };
+        return { notes: await ort.InferenceSession.create(graph, { executionProviders: ["webgpu"], externalData }), strings, finger };
       } catch {}
     }
-    return { notes: await ort.InferenceSession.create(graph, { executionProviders: ["wasm"], externalData }), strings };
+    return { notes: await ort.InferenceSession.create(graph, { executionProviders: ["wasm"], externalData }), strings, finger };
   })();
   guitar.catch(() => (guitar = null));
   return guitar;
@@ -105,11 +117,12 @@ async function tab(req: Extract<WorkerRequest, { type: "notes" }>, post: (m: Wor
     ns.forEach((n, i) => out.set(known.get(`${n.start}:${n.midi}`)!, i * 6));
     return out;
   };
+  const runFinger: RunFinger = async (x, t) => (await models.finger.run({ x: new ort.Tensor("float32", x, [1, t, 4]) })).logits.data as Float32Array;
   // every note down to the candidate threshold, each with its onset confidence (the page shows as many
   // as its slider asks for)
   const heard = async (a: GuitarActivations, upTo = Infinity) => {
     const notes = decodeGuitarNotes(a, { ...DEFAULT_GUITAR_NOTES, onset: CANDIDATE_ONSET }).filter((n) => n.start < upTo);
-    return { notes, probs: await probsFor(notes) };
+    return { notes, probs: await fingered(notes, await probsFor(notes), runFinger) };
   };
   let last = performance.now();
   const acts = await guitarActivations(resampleTo(y, SR, GUITAR_SR), runGuitar, async (p, sofar) => {
@@ -123,6 +136,21 @@ async function tab(req: Extract<WorkerRequest, { type: "notes" }>, post: (m: Wor
   });
   const h = await heard(acts);
   post({ id: req.id, type: "done", result: withNotes({ frames: req.frames, rhythm: req.rhythm, duration: y.length / SR }, h.notes, h.probs) });
+}
+
+/** The string model's probabilities weighed with the fingering model's (how guitarists finger such a
+ * passage). It reads the notes shown at first, in the tuning they seem to be played in; the rest keep
+ * the string model's alone. */
+async function fingered(notes: Note[], probs: Float32Array, run: RunFinger) {
+  const shown = notes.flatMap((n, i) => ((n.on ?? 1) >= SHOWN_ONSET ? [i] : []));
+  const tuning = detectTuning(shown.map((i) => notes[i]));
+  const shift = TUNINGS.find((t) => t.id === tuning)!.shift;
+  // the model knows standard tuning: a lowered guitar's notes are read as the frets it plays
+  const playable = shown.filter((i) => notes[i].midi - shift >= 40);
+  const f = await fingerProbs(playable.map((i) => ({ ...notes[i], midi: notes[i].midi - shift })), run);
+  const out = probs.slice();
+  playable.forEach((i, k) => out.set(combine(probs.subarray(i * 6, i * 6 + 6), f.subarray(k * 6, k * 6 + 6), FINGER_W), i * 6));
+  return out;
 }
 
 /** `threads`: 1 needs the least memory and no helper workers. `post` gets the progress, partial tabs

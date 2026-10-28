@@ -72,7 +72,7 @@ export const DEFAULT_TAB: TabOptions = {
   fretted: 0.021,
   shape: 0.307,
   shapeLink: 0.75,
-  audio: 0.7,
+  audio: 1,
   beam: 64,
 };
 

@@ -1,5 +1,5 @@
 """Trains the string classifier: pitch-aligned spectral patch + pitch -> which of the 6 strings.
-Usage: python train.py <out.pt> <epochs> <dataset spec>... [--all]
+Usage: python train.py <out.pt> <epochs> <dataset spec>... [--all] [--mask] [--init=<model.pt>]
   spec: <guitarset.npz>:<train players, e.g. 012>, <egdb.npz>:egdb (clips below 216 train), or
         <build_refs.npz>:players=<ids to train on> (the other ids are held out)"""
 
@@ -82,6 +82,9 @@ def main():
     dev = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.manual_seed(0)
     net = StringNet().to(dev)
+    init = [a.split("=", 1)[1] for a in sys.argv if a.startswith("--init=")]
+    if init:
+        net.load_state_dict(torch.load(init[0], map_location=dev))
     opt = torch.optim.AdamW(net.parameters(), 1e-3, weight_decay=1e-4)
     idx = np.where(tr)[0]
     steps = epochs * (len(idx) // 256)
@@ -108,7 +111,18 @@ def main():
             x = Xt[b].float()
             # augmentation: random gain tilt over frequency and small level noise
             tilt = (torch.rand(len(b), 1, 1) - 0.5) * 0.2 * torch.linspace(-1, 1, x.shape[2])
-            x = (x + tilt + torch.randn_like(x) * 0.01).to(dev)
+            x = x + tilt + torch.randn_like(x) * 0.01
+            if "--mask" in sys.argv:
+                # --mask: blank a random band of bins and a random run of frames, so no single detail decides
+                nb, nf = x.shape[2], x.shape[1]
+                b0 = torch.randint(0, nb, (len(b), 1, 1))
+                f0 = torch.randint(0, nf, (len(b), 1, 1))
+                bins = torch.arange(nb).view(1, 1, -1)
+                frames = torch.arange(nf).view(1, -1, 1)
+                band = (bins >= b0) & (bins < b0 + torch.randint(0, nb // 8, (len(b), 1, 1)))
+                run = (frames >= f0) & (frames < f0 + torch.randint(0, max(1, nf // 4), (len(b), 1, 1)))
+                x = x.masked_fill(band | run, 0.0)
+            x = x.to(dev)
             loss = F.cross_entropy(net(x, torch.from_numpy(midi[b]).to(dev)), torch.from_numpy(s[b]).to(dev))
             opt.zero_grad()
             loss.backward()

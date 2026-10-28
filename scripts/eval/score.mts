@@ -8,6 +8,7 @@ import { basename, join } from "path";
 import * as ort from "onnxruntime-node";
 import { DEFAULT_GUITAR_NOTES, GUITAR_SR, SEGMENT, decodeGuitarNotes, guitarActivations, resampleTo } from "../../src/lib/analysis/guitar";
 import { stringProbs } from "../../src/lib/analysis/strings";
+import { combine, fingerProbs } from "../../src/lib/analysis/fingering";
 import { DEFAULT_TAB, STANDARD, toTab, type TabNote } from "../../src/lib/tab";
 
 const [, , modelPath, stringsPath, ...dirs] = process.argv;
@@ -18,6 +19,9 @@ const runGuitar = async (x: Float32Array, n: number) => {
   const o = await guitar.run({ audio: new ort.Tensor("float32", x, [n, SEGMENT]) });
   return { onset: o.onset.data as Float32Array, offset: o.offset.data as Float32Array, frame: o.frame.data as Float32Array, velocity: o.velocity.data as Float32Array };
 };
+// FINGER=<fingering.onnx> adds the fingering model, weighted by FINGER_W (and AUDIO_W on the string model)
+const finger = process.env.FINGER ? await ort.InferenceSession.create(process.env.FINGER, opts) : null;
+const runFinger = async (x: Float32Array, t: number) => (await finger!.run({ x: new ort.Tensor("float32", x, [1, t, 4]) })).logits.data as Float32Array;
 const runStrings = async (p: Float32Array, m: Float32Array, n: number) =>
   (await strings.run({ patch: new ort.Tensor("float32", p, [n, 12, 200]), midi: new ort.Tensor("float32", m, [n]) })).logits.data as Float32Array;
 
@@ -59,7 +63,12 @@ for (const dir of dirs) {
     }
     const thresholds = { ...DEFAULT_GUITAR_NOTES, ...(process.env.ONSET ? { onset: Number(process.env.ONSET) } : {}), ...(process.env.FRAME ? { frame: Number(process.env.FRAME) } : {}) };
     const notes = decodeGuitarNotes(acts, thresholds).filter((n) => n.midi >= 40 && n.midi <= 88);
-    const p = await stringProbs(y, notes, runStrings);
+    let p = await stringProbs(y, notes, runStrings);
+    if (finger) {
+      const audioW = Number(process.env.AUDIO_W ?? 1);
+      const a = audioW === 1 ? p : p.map((v) => (v > 0 ? Math.max(1e-4, v) ** audioW : 0));
+      p = combine(a, await fingerProbs(notes, runFinger), Number(process.env.FINGER_W ?? 1));
+    }
     const tab = toTab(notes.map((n, i) => ({ ...n, strings: p.subarray(i * 6, i * 6 + 6) })), STANDARD, { ...DEFAULT_TAB, ...JSON.parse(process.env.TAB ?? "{}") });
     const ref = (JSON.parse(readFileSync(join(dir, name + ".json"), "utf8")) as number[][]).map(([start, , midi, string]) => ({ start, midi, string })).filter((r) => r.midi >= 40 && r.midi <= 88);
     const hits = match(ref, tab as TabNote[]);
