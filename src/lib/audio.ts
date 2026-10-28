@@ -279,6 +279,22 @@ export async function saveLocalAudio(id: string, blob: Blob) {
   }
 }
 
+/** Everything saved on this device, as [song id, audio]. */
+export async function allLocalAudio(): Promise<[string, Blob][]> {
+  try {
+    const db = await idb();
+    return await new Promise((resolve) => {
+      const store = db.transaction("audio").objectStore("audio");
+      const keys = store.getAllKeys();
+      const values = store.getAll();
+      values.onsuccess = () => resolve(keys.result.map((k, i) => [String(k), values.result[i] as Blob]));
+      values.onerror = () => resolve([]);
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function loadLocalAudio(id: string): Promise<Blob | null> {
   try {
     const db = await idb();

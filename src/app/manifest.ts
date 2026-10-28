@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "ChordCatch",
-    short_name: "ChordCatch",
+    name: "Strum",
+    short_name: "Strum",
     description: "Guitar chords from any song: link, upload or record.",
     start_url: "/",
     display: "standalone",

@@ -391,7 +391,7 @@ export function Catcher() {
       let peak = 0;
       for (let i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       if (samples.length < SR * 3 || peak < 0.003) throw new Error("There wasn't enough music to work with. Give it at least a few seconds.");
-      if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. ChordCatch works on single songs, so pick one track or trim the file.");
+      if (samples.length > SR * 1800) throw new Error("That's over 30 minutes long. Strum works on single songs, so pick one track or trim the file.");
       // the song opens as soon as its chords are in; its page then shows the tab filling in
       const an = getAnalyzer();
       const pass = await an.chords(samples, (stage, p) => stage !== "notes" && stage !== "paused" && step(flow, stage, p));

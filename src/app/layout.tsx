@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
+import { Moved } from "@/components/Moved";
 import { HomeLink, NewSongButton } from "@/components/NewSongButton";
 import "./globals.css";
 
@@ -8,9 +9,9 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: { default: "ChordCatch", template: "%s · ChordCatch" },
+  title: { default: "Strum", template: "%s · Strum" },
   description: "Get guitar chords from any song: paste a link, upload a file or just record it.",
-  appleWebApp: { capable: true, title: "ChordCatch", statusBarStyle: "default" },
+  appleWebApp: { capable: true, title: "Strum", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -27,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <header className="mx-auto w-full max-w-5xl px-4 pt-5 pb-3 flex items-center justify-between">
           <HomeLink>
             <Logo />
-            ChordCatch
+            Strum
           </HomeLink>
           <Suspense fallback={null}>
             <NewSongButton />
@@ -37,6 +38,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <footer className="mx-auto w-full max-w-5xl px-4 py-6 text-xs text-muted">
           Chords and notes are recognized from the audio itself, in your browser, with the open BTC (ISMIR 2019) and Riley et al. guitar transcription (ICASSP 2024) models, plus a string model trained on GuitarSet, EGDB and Guitar-TECHS. Lyrics from LRCLIB, the video&apos;s captions, or Whisper listening in your browser. The guitar that plays tabs back is made from GuitarSet&apos;s acoustic guitar recordings (CC BY 4.0).
         </footer>
+        <Moved />
       </body>
     </html>
   );

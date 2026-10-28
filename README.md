@@ -1,8 +1,8 @@
-# ChordCatch
+# Strum
 
-Guitar chords and tabs from any song. Paste a link (YouTube, Spotify, Apple Music, Deezer, SoundCloud, Bandcamp, Mixcloud, the Internet Archive, a direct audio file, or anything else [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports), upload a file, or record what's playing, and ChordCatch works the chords out from the audio itself. Every result is saved to a public library.
+Guitar chords and tabs from any song. Paste a link (YouTube, Spotify, Apple Music, Deezer, SoundCloud, Bandcamp, Mixcloud, the Internet Archive, a direct audio file, or anything else [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports), upload a file, or record what's playing, and Strum works the chords out from the audio itself. Every result is saved to a public library.
 
-Live: https://chordcatch-seven.vercel.app
+Live: https://strum.vercel.app
 
 ## How it works
 

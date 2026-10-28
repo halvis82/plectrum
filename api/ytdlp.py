@@ -227,7 +227,7 @@ class handler(BaseHTTPRequestHandler):
                     pass
                 return self.reply(422, {"error": "That track is copy-protected, so it can't be downloaded from there.", "song": song})
             if "Unsupported URL" in str(e):
-                return self.reply(422, {"error": "That page doesn't have audio ChordCatch can fetch. Try a link to the song itself."})
+                return self.reply(422, {"error": "That page doesn't have audio Strum can fetch. Try a link to the song itself."})
             msg = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([\w-]+:\s*)?", "", str(e)).split(". Use --")[0].split("\n")[0]
             self.reply(422, {"error": msg[:300]})
 
