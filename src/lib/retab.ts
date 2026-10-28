@@ -3,6 +3,7 @@
 // before the tab was in): worked out here from the song's audio and saved for everyone. Progress shows
 // on the song page like a new song's.
 
+import { ownerHeaders } from "./access";
 import { keyName } from "./music";
 import { songStats } from "./sheet";
 import { decodeToMono, sharedAnalyzer } from "./audio";
@@ -32,7 +33,7 @@ export async function workOutTab(id: string, audio: (onProgress: (p: number) => 
     const body = JSON.stringify({ key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat, beats, bpm, duration } });
     const save = async () => {
       setPending(id, { save: { state: "saving" } });
-      const res = await fetch(`/api/songs/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body }).catch(() => null);
+      const res = await fetch(`/api/songs/${id}`, { method: "PATCH", headers: { "content-type": "application/json", ...ownerHeaders(id) }, body }).catch(() => null);
       setPending(id, { save: res?.ok ? { state: "saved" } : { state: "error", retry: () => void save() } });
     };
     await save();

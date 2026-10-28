@@ -1,3 +1,4 @@
+import { canChange } from "@/lib/server/access";
 import { sql } from "@/lib/server/db";
 import { invidiousHosts, youtubeCaptionsVtt } from "@/lib/server/youtube-audio";
 import { parseVtt, validCaptions, type Captions } from "@/lib/captions";
@@ -50,6 +51,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/captions/[id]">
     return Response.json({ error: "Bad JSON" }, { status: 400 });
   }
   if (!validCaptions(c) || c.source !== "transcribed") return Response.json({ error: "Invalid captions" }, { status: 400 });
-  const rows = await sql`update songs set captions = ${JSON.stringify(c)} where id = ${id} and (captions is null or captions->>'source' = 'transcribed') returning id`;
+  // words transcribed once are kept; only the song's owner or an admin can replace them
+  const replace = await canChange(req, id);
+  const rows = await sql`update songs set captions = ${JSON.stringify(c)} where id = ${id} and (captions is null or (${replace} and captions->>'source' = 'transcribed')) returning id`;
   return rows[0] ? new Response(null, { status: 204 }) : Response.json({ error: "Not saved" }, { status: 409 });
 }

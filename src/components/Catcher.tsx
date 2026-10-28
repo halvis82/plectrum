@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Analysis } from "@/lib/analysis/analyze";
 import { SR, decodeToMono, getMicStream, saveLocalAudio, sharedAnalyzer, type Stage } from "@/lib/audio";
 import { STAGE_LABEL, pendingSnapshot, setPending } from "@/lib/pending";
+import { newOwnerKey, ownerHeaders } from "@/lib/access";
 import { customAlphabet } from "nanoid";
 import type { SongData } from "@/components/song/SongView";
 import { PcmCapture, encodeWav, resample } from "@/lib/capture";
@@ -417,7 +418,7 @@ export function Catcher() {
         views: 0,
       };
       setPending(id, { label: STAGE_LABEL.notes, p: 0, local, save: { state: "saving" } });
-      const saving = saveSong(id, JSON.stringify({ ...meta, id, key, analysis }));
+      const saving = saveSong(id, JSON.stringify({ ...meta, id, key, analysis, ownerKey: newOwnerKey(id) }));
       // the tab (and the first time, its 77 MB of models) starts once the song's page is up: big downloads
       // fill the connection, and the page and the save would otherwise queue behind them for seconds
       const startTab = () =>
@@ -437,7 +438,7 @@ export function Catcher() {
                 `/api/songs/${id}`,
                 {
                   method: "PATCH",
-                  headers: { "content-type": "application/json" },
+                  headers: { "content-type": "application/json", ...ownerHeaders(id) },
                   body: JSON.stringify({ editKey, key: keyName(songStats(done).key), analysis: { notes, chords, segments, meter, downbeat } }),
                 },
                 { timeoutMs: 60_000, tries: 4 },

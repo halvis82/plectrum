@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
+import { AdminPrompt } from "@/components/AdminPrompt";
 import { Moved } from "@/components/Moved";
 import { HomeLink, NewSongButton } from "@/components/NewSongButton";
 import "./globals.css";
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <footer className="mx-auto w-full max-w-5xl px-4 py-6 text-xs text-muted">
           Chords and notes are recognized from the audio itself, in your browser, with the open BTC (ISMIR 2019) and Riley et al. guitar transcription (ICASSP 2024) models, plus a string model trained on GuitarSet, EGDB and Guitar-TECHS and a fingering model learned from the tabs in SynthTab (CC BY-NC 4.0). Lyrics from LRCLIB, the video&apos;s captions, or Whisper listening in your browser. The guitar that plays tabs back is made from GuitarSet&apos;s acoustic guitar recordings (CC BY 4.0).
         </footer>
+        <AdminPrompt />
         <Moved />
       </body>
     </html>

@@ -1,11 +1,13 @@
 import { sql } from "@/lib/server/db";
 import { validAnalysis } from "@/lib/analysis/validate";
+import { canChange, forbidden } from "@/lib/server/access";
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : undefined);
 
-/** Anyone can rename a song (public library). The browser that made a song adds its notes (and the
- * chords decided with them) once, with the edit key it got when saving the first chords; a song that
- * never got its notes can have them filled in by anyone, once. */
+/** Renaming takes the song's owner or an admin (see access.ts). The browser that made a song adds its
+ * notes (and the chords decided with them) once, with the edit key it got when saving the first chords;
+ * a song that never got its notes can have them filled in by anyone, once; the owner or an admin can
+ * replace them any time. */
 export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) {
   const { id } = await ctx.params;
   const raw = await req.text();
@@ -20,8 +22,9 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) 
     // the browser that made the song, within the hour, with its key; or anyone filling in a tab the
     // song never got (a song's tab is never replaced this way)
     const key = typeof body.editKey === "string" ? body.editKey : "";
+    const anyTime = await canChange(req, id);
     const [song] = (await sql`select analysis from songs
-      where id = ${id} and ((edit_key = ${key} and created_at > now() - interval '1 hour') or analysis->'notes' is null)`) as { analysis: Record<string, unknown> }[];
+      where id = ${id} and (${anyTime} or (edit_key = ${key} and created_at > now() - interval '1 hour') or analysis->'notes' is null)`) as { analysis: Record<string, unknown> }[];
     if (!song) return Response.json({ error: "Forbidden" }, { status: 403 });
     // the notes, and the chords decided again with them; timing (beats, duration) stays as saved unless sent
     const u = (body.analysis ?? {}) as Record<string, unknown>;
@@ -35,6 +38,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) 
       edit_key = null, updated_at = now() where id = ${id}`;
     return new Response(null, { status: 204 });
   }
+  if (!(await canChange(req, id))) return forbidden();
   const title = str(body.title, 200);
   const artist = str(body.artist, 200);
   if (title === "" ) return Response.json({ error: "Title can't be empty" }, { status: 400 });
@@ -46,11 +50,10 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/songs/[id]">) 
   return rows[0] ? Response.json(rows[0]) : Response.json({ error: "Not found" }, { status: 404 });
 }
 
-/** Deleting needs the admin token (ADMIN_TOKEN env var). */
+/** Deleting takes the song's owner or an admin. */
 export async function DELETE(req: Request, ctx: RouteContext<"/api/songs/[id]">) {
   const { id } = await ctx.params;
-  const token = process.env.ADMIN_TOKEN;
-  if (!token || req.headers.get("x-admin-token") !== token) return Response.json({ error: "Forbidden" }, { status: 403 });
+  if (!(await canChange(req, id))) return forbidden();
   await sql`delete from songs where id = ${id}`;
   return new Response(null, { status: 204 });
 }

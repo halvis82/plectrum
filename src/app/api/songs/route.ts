@@ -3,6 +3,7 @@ import { customAlphabet } from "nanoid";
 import { listSongs, sql } from "@/lib/server/db";
 import { validAnalysis } from "@/lib/analysis/validate";
 import { validEdits } from "@/lib/edits";
+import { ownerHash } from "@/lib/server/access";
 
 const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 const newId = customAlphabet(ALPHABET, 10);
@@ -40,6 +41,8 @@ export async function POST(req: Request) {
   const edits = body.edits === undefined ? null : validEdits(body.edits) ? body.edits : undefined;
   if (edits === undefined) return Response.json({ error: "Invalid edits" }, { status: 400 });
   const id = typeof body.id === "string" && ID_RE.test(body.id) ? body.id : newId();
+  // the browser keeps the owner key that lets it change the song later; only its hash is stored
+  const owner = typeof body.ownerKey === "string" && body.ownerKey.length >= 20 && body.ownerKey.length <= 100 ? ownerHash(body.ownerKey) : null;
   // the same browser retrying a save that already went through
   const [had] = (await sql`select edit_key from songs where id = ${id}`) as { edit_key: string | null }[];
   if (had) return Response.json({ id, editKey: had.edit_key });
@@ -50,7 +53,7 @@ export async function POST(req: Request) {
     await sql`delete from songs where (youtube_id = ${youtubeId} or source_url = ${sourceUrl})
       and analysis->'notes' is null and (edit_key is null or created_at < now() - interval '1 hour')`;
   }
-  await sql`insert into songs (id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, edit_key, edits)
-    values (${id}, ${title}, ${artist}, ${source}, ${sourceUrl}, ${youtubeId}, ${audioUrl}, ${a.duration}, ${a.bpm}, ${a.meter}, ${songKey}, ${JSON.stringify(a)}, ${editKey}, ${edits ? JSON.stringify(edits) : null})`;
+  await sql`insert into songs (id, title, artist, source, source_url, youtube_id, audio_url, duration, bpm, meter, song_key, analysis, edit_key, edits, owner_hash)
+    values (${id}, ${title}, ${artist}, ${source}, ${sourceUrl}, ${youtubeId}, ${audioUrl}, ${a.duration}, ${a.bpm}, ${a.meter}, ${songKey}, ${JSON.stringify(a)}, ${editKey}, ${edits ? JSON.stringify(edits) : null}, ${owner})`;
   return Response.json({ id, editKey });
 }

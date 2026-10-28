@@ -1,9 +1,13 @@
 "use client";
 
+import { customAlphabet } from "nanoid";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { newOwnerKey } from "@/lib/access";
 import { NO_CHORD, gridBeats, type Edits, type Grid } from "@/lib/edits";
 import { STANDARD } from "@/lib/tab";
+
+const newSongId = customAlphabet("23456789abcdefghjkmnpqrstuvwxyz", 10);
 
 /** Starts an empty song (16 bars of 4/4 at 90 BPM) and opens it ready to write in. */
 export function ScratchButton() {
@@ -18,7 +22,10 @@ export function ScratchButton() {
     const analysis = { v: 1, duration: beats.length * (60 / grid.bpm), bpm: grid.bpm, meter: grid.meter, downbeat: 0, beats, chords: beats.map(() => NO_CHORD), segments: [], notes: [] };
     const edits: Edits = { v: 1, grid, tab: [], tuning: [...STANDARD] };
     try {
-      const r = await fetch("/api/songs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "Untitled song", source: "scratch", analysis, edits }) });
+      // the id is picked here so the owner key can be kept under it before the song exists
+      const id = newSongId();
+      const payload = JSON.stringify({ id, title: "Untitled song", source: "scratch", analysis, edits, ownerKey: newOwnerKey(id) });
+      const r = await fetch("/api/songs", { method: "POST", headers: { "content-type": "application/json" }, body: payload });
       const body = await r.json();
       if (!r.ok) throw new Error(body.error);
       router.push(`/song/${body.id}?edit=1`);

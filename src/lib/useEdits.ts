@@ -2,6 +2,7 @@
 // A song's edits with undo/redo, saved to the server shortly after each change.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ownerHeaders } from "./access";
 import type { Edits } from "./edits";
 
 export type SaveState = "saved" | "saving" | "unsaved" | "error";
@@ -19,7 +20,7 @@ export function useEdits(songId: string, initial: Edits | null) {
     async (e: Edits | null) => {
       setSave("saving");
       try {
-        const r = await fetch(`/api/songs/${songId}/edits`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(e), keepalive: JSON.stringify(e).length < 60000 });
+        const r = await fetch(`/api/songs/${songId}/edits`, { method: "PUT", headers: { "content-type": "application/json", ...ownerHeaders(songId) }, body: JSON.stringify(e), keepalive: JSON.stringify(e).length < 60000 });
         // a newer change is already waiting: its save will report
         if (latest.current !== e) return;
         setSave(r.ok ? "saved" : "error");

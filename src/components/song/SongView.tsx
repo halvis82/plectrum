@@ -1,5 +1,6 @@
 "use client";
 
+import { mayChange } from "@/lib/access";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import type { Analysis, NoteRow } from "@/lib/analysis/analyze";
@@ -234,6 +235,10 @@ export function SongView({ song }: { song: SongData }) {
     } else update({ mode: "tab" });
     setEditing(true);
   }, [edits, autoTuning.strings, shownRows, ed, update]);
+  /** editing from a button: only the song's owner or an admin (asked for the password) */
+  const tryEditing = async () => {
+    if (await mayChange(song.id)) startEditing();
+  };
 
   // a new song from scratch opens ready to write in
   const openedForEditing = useRef(false);
@@ -471,7 +476,7 @@ export function SongView({ song }: { song: SongData }) {
             </button>
           )}
           {editing ? null : (
-            <button onClick={startEditing} className="btn btn-sm" title="Fix notes and chords, add your own, cut parts out" aria-label="Edit">
+            <button onClick={() => void tryEditing()} className="btn btn-sm" title="Fix notes and chords, add your own, cut parts out" aria-label="Edit">
               ✎<span className="hidden sm:inline"> Edit</span>
             </button>
           )}
@@ -653,7 +658,7 @@ export function SongView({ song }: { song: SongData }) {
                   Work out the tab
                 </button>
               )}
-              <button onClick={startEditing} className="btn btn-sm">
+              <button onClick={() => void tryEditing()} className="btn btn-sm">
                 Write the tab by hand
               </button>
             </div>
